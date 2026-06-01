@@ -1,0 +1,73 @@
+export type Unit = "mm" | "px" | "cm" | "in";
+
+export type ElementType = "text" | "qr" | "barcode" | "image" | "random" | "sequence";
+
+export interface ElementStyle {
+    // Text specific
+    fontFamily?: string;
+    fontSize?: number;
+    fontWeight?: string | number;
+    textAlign?: "left" | "center" | "right";
+    verticalAlign?: "top" | "middle" | "bottom";
+    color?: string;
+
+    // Border
+    borderWidth?: number;
+    borderColor?: string;
+    borderStyle?: "solid" | "dashed" | "dotted";
+
+    // General
+    backgroundColor?: string;
+}
+
+export interface StickerElement {
+    id: string;
+    type: ElementType;
+
+    // Position & Size (based on Layout Unit)
+    x: number;
+    y: number;
+    w: number;
+    h: number; // For Text, h might be "auto" or ignored mostly, but useful for bounding box
+
+    // Content
+    // content can be static text like "Name:" 
+    // OR dynamic variable like "{{name}}"
+    content: string;
+
+    // Optional separator for multi-element QR codes
+    qrSeparator?: string;
+
+    // Barcode format (e.g. "CODE128", "EAN13", "UPC")
+    barcodeFormat?: string;
+
+    // Random number range
+    randomMin?: number;
+    randomMax?: number;
+    randomDecimals?: number;
+
+    // Sequence settings
+    sequenceStart?: number;
+    sequenceStep?: number;
+    sequenceDigits?: number;
+
+    style?: ElementStyle;
+}
+
+export type StickerData = Record<string, unknown>;
+
+export interface StickerLayout {
+    id: string;
+    name: string;
+    width: number;
+    height: number;
+    unit: Unit;
+    elements: StickerElement[];
+    targetEntity?: string;
+
+    // Optional background
+    backgroundColor?: string;
+    backgroundImage?: string;
+}
+
+export type ImageFormat = "png" | "jpeg" | "jpg" | "webp";

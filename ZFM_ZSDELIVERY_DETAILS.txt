@@ -1,0 +1,220 @@
+FUNCTION zfm_zsdelivery_details.
+*"----------------------------------------------------------------------
+*"*"本地接口：
+*"  IMPORTING
+*"     VALUE(IV_WBSTK) TYPE  CHAR1 OPTIONAL
+*"     VALUE(IV_CUST_NAME) TYPE  KNA1-NAME1 OPTIONAL
+*"     VALUE(IV_WADAT_FROM) TYPE  LIKP-WADAT_IST OPTIONAL
+*"     VALUE(IV_WADAT_TO) TYPE  LIKP-WADAT_IST OPTIONAL
+*"     VALUE(IV_ERDAT_FROM) TYPE  LIKP-ERDAT OPTIONAL
+*"     VALUE(IV_ERDAT_TO) TYPE  LIKP-ERDAT OPTIONAL
+*"  TABLES
+*"      ET_OUTPUT STRUCTURE  ZSDELIVERY_DETAILS OPTIONAL
+*"----------------------------------------------------------------------
+    " 1. 客户名称 → 客户编号
+    DATA: lt_kunnr TYPE RANGE OF kunnr.
+    IF iv_cust_name IS NOT INITIAL.
+      iv_cust_name = '%' && iv_cust_name && '%'.
+      SELECT kunnr FROM kna1
+        WHERE name1 LIKE @iv_cust_name
+        INTO TABLE @DATA(lt_kunnr_tab).
+      IF sy-subrc <> 0.
+        RETURN.
+      ENDIF.
+      lt_kunnr = VALUE #( FOR wa IN lt_kunnr_tab ( sign = 'I' option = 'EQ' low = wa-kunnr ) ).
+    ENDIF.
+
+    " 2. 过账状态范围
+    DATA: r_wbstk TYPE RANGE OF likp-wbstk.
+    CASE iv_wbstk.
+      WHEN '1'. r_wbstk = VALUE #( ( sign = 'I' option = 'EQ' low = 'C' ) ).
+      WHEN '2'. r_wbstk = VALUE #( ( sign = 'I' option = 'NE' low = 'C' ) ).
+    ENDCASE.
+
+    " 3. 日期范围
+    DATA: r_wadat TYPE RANGE OF likp-wadat_ist,
+          r_erdat TYPE RANGE OF likp-erdat.
+    IF iv_wadat_from IS NOT INITIAL OR iv_wadat_to IS NOT INITIAL.
+      r_wadat = VALUE #( ( sign = 'I' option = 'BT'
+                           low = iv_wadat_from high = iv_wadat_to ) ).
+    ENDIF.
+    IF iv_erdat_from IS NOT INITIAL OR iv_erdat_to IS NOT INITIAL.
+      r_erdat = VALUE #( ( sign = 'I' option = 'BT'
+                           low = iv_erdat_from high = iv_erdat_to ) ).
+    ENDIF.
+
+    " 4. 主数据查询（条件简化）
+    SELECT p~vbeln, p~posnr, p~vgbel, p~vgpos,
+           p~matnr, p~kdmat, p~arktx, p~lfimg, p~meins,
+           p~charg, k~kunnr, k~erdat, k~wadat_ist,
+           d~groes, e~maktx,"d~zfzdw,
+           d~zbzcd AS zbzcd, d~zbzkd AS zbzkd, d~zbzhd AS zbzhd,
+           d~zbzbz AS zbzbz, d~zbzzl AS zbzzl, d~zhyzl AS zhyzl,
+           d~zfzdw AS zfzdw, n~sortl,n~name1
+      FROM likp AS k
+      INNER JOIN lips AS p ON k~vbeln = p~vbeln
+      INNER JOIN tvtwt AS a ON a~vtweg = p~vtweg AND a~spras = @sy-langu
+      INNER JOIN tvlkt AS b ON b~lfart = k~lfart AND b~spras = @sy-langu
+      INNER JOIN tvkot AS c ON c~vkorg = k~vkorg AND c~spras = @sy-langu
+      INNER JOIN mara AS d ON d~matnr = p~matnr
+      INNER JOIN makt AS e ON e~matnr = p~matnr AND e~spras = @sy-langu
+      LEFT JOIN ztmm008a AS z ON p~vbeln = z~vbeln AND p~posnr = z~posnr
+      LEFT JOIN ztmm008b AS z1 ON p~vbeln = z1~vbeln AND p~posnr = z1~posnr
+      LEFT JOIN vbpa AS v ON v~vbeln = p~vgbel AND v~posnr = '000000' AND v~parvw = 'Z1'
+      LEFT JOIN vbak AS v1 ON v1~vbeln = p~vgbel
+      LEFT JOIN vbap AS v2 ON v2~vbeln = p~vgbel AND v2~posnr = p~vgpos
+      LEFT JOIN kna1 AS n ON n~kunnr = v1~kunnr
+      WHERE k~wadat_ist IN @r_wadat
+        AND k~erdat     IN @r_erdat
+        AND k~kunnr     IN @lt_kunnr
+        AND k~wbstk     IN @r_wbstk
+        AND k~lifsk     = ''
+      INTO CORRESPONDING FIELDS OF TABLE @et_output[].
+
+    CHECK et_output[] IS NOT INITIAL.
+
+
+  "获取辅助描述表
+*  SELECT werks, name1 INTO TABLE @DATA(lt_t001w)
+*    FROM t001w
+*    WHERE werks IN @it_werks.
+*  SELECT werks, lgort, lgobe INTO TABLE @DATA(lt_t001l)
+*    FROM t001l
+*    WHERE werks IN @it_werks.
+*  SELECT vkbur, bezei INTO TABLE @DATA(lt_tvkbt)
+*    FROM tvkbt
+*    WHERE vkbur IN @it_vkbur AND spras = @sy-langu.
+*  SELECT vkgrp, bezei INTO TABLE @DATA(lt_tvgrt)
+*    FROM tvgrt
+*    WHERE vkgrp IN @it_vkgrp AND spras = @sy-langu.
+*  SELECT partner, name_org1, name_org2 INTO TABLE @DATA(lt_but000)
+*    FROM but000
+*    WHERE partner IN @it_kunnr.
+
+  "获取销售订单相关数据
+  DATA(lt_output_vg) = et_output[].
+  DELETE lt_output_vg WHERE vgbel IS INITIAL.
+*  DELETE lt_output_vg WHERE vgbel IS INITIAL.
+  IF lt_output_vg IS NOT INITIAL.
+    SELECT vbeln, posnr, bstkd_ana, zbzcd, zbzkd, zbzhd, zbzbz, zfzsl,
+           zhyzl, zbzzl, znumber
+      INTO TABLE @DATA(lt_vbap)
+      FROM vbap
+      FOR ALL ENTRIES IN @lt_output_vg
+      WHERE vbeln = @lt_output_vg-vgbel
+        AND posnr = @lt_output_vg-vgpos.
+    SELECT DISTINCT a~vbeln, b~str_suppl1, b~str_suppl2, b~str_suppl3,
+           b~name_co, b~tel_number
+      INTO TABLE @DATA(lt_vbpa)
+      FROM vbpa AS a
+      INNER JOIN adrc AS b ON a~adrnr = b~addrnumber
+      FOR ALL ENTRIES IN @lt_output_vg
+      WHERE a~vbeln = @lt_output_vg-vbeln
+        AND a~parvw = 'WE'.
+  ENDIF.
+
+*  "获取用户名称
+*  SELECT bname, name_last, name_first INTO TABLE @DATA(lt_user)
+*    FROM user_addr.
+
+  "填充输出表其他字段
+  LOOP AT et_output ASSIGNING FIELD-SYMBOL(<ls_out>).
+*    "过账状态文本
+*    IF <ls_out>-wbstk = 'C'.
+*      <ls_out>-text4 = '已过帐'.
+*    ELSE.
+*      <ls_out>-text4 = '未过帐'.
+*    ENDIF.
+
+*    "读取采购订单信息（NLN类型）
+*    IF <ls_out>-pstyv = 'NLN'.
+*      SELECT SINGLE zbzcd, zbzkd, zbzzl
+*        FROM ekpo
+*        WHERE ebeln = @<ls_out>-vgbel
+*          AND ebelp = @<ls_out>-vgpos
+*        INTO ( @<ls_out>-zbzcd, @<ls_out>-zbzkd, @<ls_out>-zbzzl ).
+*    ENDIF.
+
+*    "工厂描述
+*    <ls_out>-name1 = VALUE #( lt_t001w[ werks = <ls_out>-werks ]-name1 DEFAULT '' ).
+*    "仓库描述
+*    <ls_out>-lgobe = VALUE #( lt_t001l[ werks = <ls_out>-werks lgort = <ls_out>-lgort ]-lgobe DEFAULT '' ).
+*    "销售部门描述
+*    <ls_out>-bezei1 = VALUE #( lt_tvkbt[ vkbur = <ls_out>-vkbur ]-bezei DEFAULT '' ).
+*    "销售组描述
+*    <ls_out>-bezei2 = VALUE #( lt_tvgrt[ vkgrp = <ls_out>-vkgrp ]-bezei DEFAULT '' ).
+*    "客户名称
+*    <ls_out>-name_org1 = COND #( WHEN line_exists( lt_but000[ partner = <ls_out>-kunnr ] )
+*                                 THEN lt_but000[ partner = <ls_out>-kunnr ]-name_org1 &&
+*                                      lt_but000[ partner = <ls_out>-kunnr ]-name_org2
+*                                 ELSE '' ).
+
+    "发货过账人
+    SELECT SINGLE value_new, changenr
+      FROM cdpos
+      WHERE objectid = @<ls_out>-vbeln
+        AND tabname = 'LIKP'
+        AND fname = 'WBSTK'
+      INTO ( @DATA(lv_value), @DATA(lv_changenr) ).
+    IF lv_value = 'C'.
+      SELECT SINGLE username INTO @DATA(lv_username)
+        FROM cdhdr
+        WHERE objectid = @<ls_out>-vbeln
+          AND ( tcode = 'VL02N' OR tcode = 'VL03N' OR tcode = 'VL06G' )
+          AND changenr = @lv_changenr.
+    ENDIF.
+
+
+
+    "销售订单物料信息
+    ASSIGN lt_vbap[ vbeln = <ls_out>-vgbel posnr = <ls_out>-vgpos ] TO FIELD-SYMBOL(<ls_vbap>).
+    IF sy-subrc = 0.
+*      <ls_out>-bstkd_ana = <ls_vbap>-bstkd_ana.
+      <ls_out>-zbzcd2     = <ls_vbap>-zbzcd.
+      <ls_out>-zbzkd2     = <ls_vbap>-zbzkd.
+*      <ls_out>-zbzhd     = <ls_vbap>-zbzhd.
+*      <ls_out>-zbzbz     = <ls_vbap>-zbzbz.
+*      <ls_out>-zfzsl     = <ls_vbap>-zfzsl.
+*      <ls_out>-zhyzl     = <ls_vbap>-zhyzl.
+*      <ls_out>-zbzzl     = <ls_vbap>-zbzzl.
+*      <ls_out>-znumber   = <ls_vbap>-znumber.
+    ENDIF.
+
+*    "收货地址
+*    ASSIGN lt_vbpa[ vbeln = <ls_out>-vbeln ] TO FIELD-SYMBOL(<ls_vbpa>).
+*    IF sy-subrc = 0.
+*      <ls_out>-str_suppl = <ls_vbpa>-str_suppl1 && <ls_vbpa>-str_suppl2 && <ls_vbpa>-str_suppl3.
+*      <ls_out>-tel = <ls_vbpa>-name_co && ` ` && <ls_vbpa>-tel_number.
+*    ENDIF.
+
+*    "读取行备注（对象 VBBP，文本 ID 0001）
+*    DATA(lv_numpos) = <ls_out>-vbeln && <ls_out>-posnr.
+*    PERFORM read_text IN PROGRAM saplstxd USING '0001' 'VBBP' lv_numpos sy-langu
+*                CHANGING <ls_out>-text1.
+*
+*    "读取整单备注（对象 VBBK，文本 ID 0001）
+*    PERFORM read_text IN PROGRAM saplstxd USING '0001' 'VBBK' <ls_out>-vbeln sy-langu
+*                CHANGING <ls_out>-text2.
+*
+*    "读取单位备注（对象 VBBP，文本 ID 0002）
+*    PERFORM read_text IN PROGRAM saplstxd USING '0002' 'VBBP' lv_numpos sy-langu
+*                CHANGING <ls_out>-text3.
+*
+*    "读取旧料号描述（对象 MATERIAL，文本 ID GRUN）
+*    PERFORM read_text IN PROGRAM saplstxd USING 'GRUN' 'MATERIAL' <ls_out>-matnr sy-langu
+*                CHANGING <ls_out>-text5.
+
+    "品名字段（取 maktx 中 & 符号前的部分）
+    SPLIT <ls_out>-maktx AT '&' INTO <ls_out>-pm DATA(lv_rest).
+
+    "辅助数量计算（若标重有值但辅助数量为空）
+    IF <ls_out>-zbzzl IS NOT INITIAL AND <ls_out>-zfzsl IS INITIAL.
+      <ls_out>-zfzsl = <ls_out>-lfimg / <ls_out>-zbzzl.
+    ENDIF.
+    "行重计算
+    <ls_out>-lfimg_hy = <ls_out>-zfzsl * <ls_out>-zhyzl.
+  ENDLOOP.
+
+  SORT et_output BY vbeln wadat_ist posnr.
+
+ENDFUNCTION.

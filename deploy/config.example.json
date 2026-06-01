@@ -1,0 +1,5 @@
+{
+    "mysql_password": "你的MySQL密码",
+    "_comment": "如果连接失败，尝试改成 caching_sha2_password 或 mysql_native_password",
+    "mysql_auth": "caching_sha2_password"
+}

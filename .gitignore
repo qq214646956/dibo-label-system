@@ -1,0 +1,43 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# SAP DLLs (large binaries, not for repo)
+*.dll
+*.exe
+
+# Deployment binaries
+nssm.exe
+nssm-2.24/
+nssm.zip
+download_nssm.ps1
+python-installer.exe
+
+# Offline packages
+offline-packages/
+
+# Config with secrets (keep example only)
+config.json
+
+# Logs
+*.log
+
+# Archives
+*.rar
+*.zip
+*.7z
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db

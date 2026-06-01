@@ -1,0 +1,5 @@
+flask
+flask-cors
+pyrfc
+waitress
+mysql-connector-python

@@ -1,0 +1,81 @@
+{
+  "name": "qrlayout-core",
+  "version": "1.1.6",
+  "description": "Headless QR code label rendering engine — generate ZPL, PDF, PNG layouts from JSON. Works in browser and Node.js.",
+  "keywords": [
+    "qr-code",
+    "qr-layout",
+    "zpl",
+    "pdf",
+    "qrcode-rendering",
+    "thermal-printer",
+    "headless",
+    "batch-printing",
+    "zebra-printer",
+    "label-printing",
+    "qr-label",
+    "sticker-printing",
+    "barcode",
+    "typescript",
+    "nodejs",
+    "canvas-rendering",
+    "label-designer",
+    "mail-merge",
+    "layout-engine",
+    "react",
+    "vue",
+    "svelte"
+  ],
+  "author": "Shashidhar Naik <shashidharnaik8@gmail.com>",
+  "license": "MIT",
+  "homepage": "https://github.com/shashi089/qr-code-layout-generate-tool/tree/main/packages/core#readme",
+  "bugs": {
+    "url": "https://github.com/shashi089/qr-code-layout-generate-tool/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/shashi089/qr-code-layout-generate-tool.git",
+    "directory": "packages/core"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "type": "module",
+  "main": "dist/index.js",
+  "module": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./pdf": {
+      "types": "./dist/pdf.d.ts",
+      "import": "./dist/pdf.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json"
+  },
+  "sideEffects": false,
+  "dependencies": {
+    "jsbarcode": "^3.12.3",
+    "qrcode": "^1.5.4"
+  },
+  "optionalDependencies": {
+    "jspdf": "^3.0.4"
+  },
+  "devDependencies": {
+    "@types/jsbarcode": "^3.11.4",
+    "@types/qrcode": "^1.5.6",
+    "typescript": "^5.3.3"
+  }
+}
