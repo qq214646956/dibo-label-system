@@ -14,6 +14,7 @@ const TYPE_OPTIONS = [
     { value: '', label: '全部' },
     { value: 'label', label: '标签' },
     { value: 'report', label: '出货报告' },
+    { value: 'cover', label: '封面标签' },
 ];
 
 export const LabelList: React.FC<LabelListProps> = ({
@@ -48,17 +49,21 @@ export const LabelList: React.FC<LabelListProps> = ({
             header: '模板名称',
             accessorKey: 'name',
             render: (_val, item) => {
-                const isReport = (item as any).templateType === 'report';
+                const tt = (item as any).templateType || 'label';
+                const isCover = tt === 'cover';
+                const isReport = tt === 'report';
+                const colors = isCover ? 'bg-purple-100 text-purple-600' : isReport ? 'bg-green-100 text-green-600' : 'bg-blue-100 text-blue-600';
+                const badge = isCover ? 'bg-purple-50 text-purple-700' : isReport ? 'bg-green-50 text-green-700' : 'bg-blue-50 text-blue-700';
+                const label = isCover ? '封面标签' : isReport ? '出货报告' : '标签';
+                const Icon = isCover ? Layout : isReport ? FileText : Layout;
                 return (
                     <div className="flex items-center gap-3">
-                        <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${isReport ? 'bg-green-100 text-green-600' : 'bg-blue-100 text-blue-600'}`}>
-                            {isReport ? <FileText size={20} /> : <Layout size={20} />}
+                        <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${colors}`}>
+                            <Icon size={20} />
                         </div>
                         <div>
                             <div className="font-semibold text-gray-900">{item.name}</div>
-                            <span className={`text-xs px-1.5 py-0.5 rounded ${isReport ? 'bg-green-50 text-green-700' : 'bg-blue-50 text-blue-700'}`}>
-                                {isReport ? '出货报告' : '标签'}
-                            </span>
+                            <span className={`text-xs px-1.5 py-0.5 rounded ${badge}`}>{label}</span>
                         </div>
                     </div>
                 );
@@ -116,6 +121,13 @@ export const LabelList: React.FC<LabelListProps> = ({
                     >
                         <Plus size={20} />
                         <span>新建报告</span>
+                    </button>
+                    <button
+                        onClick={() => onCreateNew('cover')}
+                        className="flex items-center justify-center gap-2 bg-purple-600 hover:bg-purple-700 text-white px-5 py-3 rounded-xl font-medium transition-all shadow-sm hover:shadow-md active:scale-95 cursor-pointer"
+                    >
+                        <Plus size={20} />
+                        <span>新建封面</span>
                     </button>
                 </div>
             </div>

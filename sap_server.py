@@ -7,7 +7,14 @@ Flask 单进程托管：SAP RFC 代理 + MySQL 模板共享 + 前端静态文件
 import os
 import sys
 import json
+import uuid
 from flask import Flask, request, jsonify, send_from_directory
+try:
+    import openpyxl
+    from openpyxl.utils import get_column_letter
+    HAS_OPENPYXL = True
+except ImportError:
+    HAS_OPENPYXL = False
 from flask_cors import CORS
 HAS_SAP = True  # 默认尝试连接
 try:
@@ -454,6 +461,206 @@ def static_files(path):
 # =============================================
 # 启动
 # =============================================
+
+# =============================================
+# Excel 导入 API
+# =============================================
+
+@app.route('/api/import-excel', methods=['POST'])
+def import_excel():
+    if not HAS_OPENPYXL:
+        return jsonify({'success': False, 'message': '服务器未安装 openpyxl，请执行 pip install openpyxl'}), 500
+    if 'file' not in request.files:
+        return jsonify({'success': False, 'message': '未上传文件'}), 400
+    file = request.files['file']
+    if not file.filename.endswith(('.xlsx', '.xls')):
+        return jsonify({'success': False, 'message': '请上传 .xlsx 文件'}), 400
+
+    try:
+        wb = openpyxl.load_workbook(file, data_only=True)
+        ws = wb.active
+        merged_ranges = list(ws.merged_cells.ranges)
+        elements = []
+        processed_cells = set()
+
+        for merged in merged_ranges:
+            min_row, min_col = merged.min_row, merged.min_col
+            max_row, max_col = merged.max_row, merged.max_col
+            cell = ws.cell(min_row, min_col)
+            content = str(cell.value).strip() if cell.value is not None else ''
+            for r in range(min_row, max_row + 1):
+                for c in range(min_col, max_col + 1):
+                    processed_cells.add((r, c))
+            style = _extract_merged_style(ws, min_row, min_col, max_row, max_col)
+            if not content and not style:
+                continue
+            x_mm, y_mm = _excel_to_mm_pos(ws, min_row, min_col)
+            w_mm = _col_range_width_mm(ws, min_col, max_col)
+            h_mm = _row_range_height_mm(ws, min_row, max_row)
+            elem = {
+                'id': str(uuid.uuid4())[:8], 'type': 'text',
+                'x': round(x_mm, 1), 'y': round(y_mm, 1),
+                'w': round(w_mm, 1), 'h': round(h_mm, 1),
+                'content': content, 'style': style if style else {}
+            }
+            elements.append(elem)
+
+        for row in ws.iter_rows(min_row=1, max_row=ws.max_row, min_col=1, max_col=ws.max_column):
+            for cell in row:
+                if (cell.row, cell.column) in processed_cells:
+                    continue
+                content = str(cell.value).strip() if cell.value is not None else ''
+                style = _extract_cell_style(cell)
+                if not content and not style:
+                    continue
+                x_mm, y_mm = _excel_to_mm_pos(ws, cell.row, cell.column)
+                w_mm = _col_width_mm(ws, cell.column)
+                h_mm = _row_height_mm(ws, cell.row)
+                elem = {
+                    'id': str(uuid.uuid4())[:8], 'type': 'text',
+                    'x': round(x_mm, 1), 'y': round(y_mm, 1),
+                    'w': round(w_mm, 1), 'h': round(h_mm, 1),
+                    'content': content, 'style': style if style else {}
+                }
+                elements.append(elem)
+                processed_cells.add((cell.row, cell.column))
+
+        if not elements:
+            return jsonify({'success': False, 'message': 'Excel 中没有找到任何内容'}), 400
+
+        max_right = max(e['x'] + e['w'] for e in elements)
+        max_bottom = max(e['y'] + e['h'] for e in elements)
+        template_name = file.filename.rsplit('.', 1)[0]
+
+        layout = {
+            'id': str(uuid.uuid4())[:8], 'name': template_name,
+            'width': round(max_right, 1), 'height': round(max_bottom, 1),
+            'unit': 'mm', 'targetEntity': 'delivery',
+            'backgroundColor': '#ffffff', 'elements': elements
+        }
+        wb.close()
+        return jsonify({'success': True, 'data': layout})
+    except Exception as e:
+        return jsonify({'success': False, 'message': f'解析 Excel 失败: {e}'}), 500
+
+
+def _col_width_mm(ws, col):
+    letter = get_column_letter(col)
+    cd = ws.column_dimensions.get(letter)
+    char_units = cd.width if (cd and cd.width) else 8.43
+    px = char_units * 12 if char_units <= 1 else char_units * 7 + 5
+    return px / 96 * 25.4
+
+def _row_height_mm(ws, row):
+    rd = ws.row_dimensions.get(row)
+    pt = rd.height if (rd and rd.height) else 15
+    return pt * 0.3528
+
+def _col_range_width_mm(ws, min_col, max_col):
+    return sum(_col_width_mm(ws, c) for c in range(min_col, max_col + 1))
+
+def _row_range_height_mm(ws, min_row, max_row):
+    return sum(_row_height_mm(ws, r) for r in range(min_row, max_row + 1))
+
+def _excel_to_mm_pos(ws, row, col):
+    x_mm = sum(_col_width_mm(ws, c) for c in range(1, col))
+    y_mm = sum(_row_height_mm(ws, r) for r in range(1, row))
+    return x_mm, y_mm
+
+def _cell_has_border(cell):
+    """检查单个单元格是否有边框"""
+    if not cell.border:
+        return False
+    sides = [cell.border.left, cell.border.right, cell.border.top, cell.border.bottom]
+    return any(s and s.style is not None for s in sides)
+
+
+def _extract_cell_style(cell):
+    """提取单单元格样式，无边框返回 None"""
+    style = {}
+    has_any = False
+
+    if cell.font:
+        if cell.font.size:
+            style['fontSize'] = int(cell.font.size)
+            has_any = True
+        if cell.font.bold:
+            style['fontWeight'] = 'bold'
+            has_any = True
+        if cell.font.color and cell.font.color.rgb:
+            try:
+                rgb = cell.font.color.rgb
+                if isinstance(rgb, str) and len(rgb) >= 6:
+                    if len(rgb) == 8:
+                        rgb = rgb[2:]
+                    style['color'] = f'#{rgb}'
+                    has_any = True
+            except Exception:
+                pass
+    if cell.alignment:
+        h, v = cell.alignment.horizontal, cell.alignment.vertical
+        if h in ('left', 'center', 'right'):
+            style['textAlign'] = h
+            has_any = True
+        if v in ('top', 'middle', 'bottom', 'center'):
+            style['verticalAlign'] = v if v != 'center' else 'middle'
+            has_any = True
+    if _cell_has_border(cell):
+        style['borderWidth'] = 1
+        style['borderColor'] = '#000000'
+        style['borderStyle'] = 'solid'
+        has_any = True
+
+    if not has_any:
+        return None
+    style.setdefault('fontSize', 10)
+    return style
+
+
+def _extract_merged_style(ws, min_row, min_col, max_row, max_col):
+    """提取合并单元格样式：从四边收集边框"""
+    cell = ws.cell(min_row, min_col)
+    style = _extract_cell_style(cell)
+    if style is None:
+        style = {}
+
+    # 收集合并区域外围边框（四条边各自的任意子单元格有边框即算有边框）
+    has_border = False
+
+    # 上边
+    for c in range(min_col, max_col + 1):
+        if _cell_has_border(ws.cell(min_row, c)):
+            has_border = True
+            break
+    # 下边
+    if not has_border:
+        for c in range(min_col, max_col + 1):
+            if _cell_has_border(ws.cell(max_row, c)):
+                has_border = True
+                break
+    # 左边
+    if not has_border:
+        for r in range(min_row, max_row + 1):
+            if _cell_has_border(ws.cell(r, min_col)):
+                has_border = True
+                break
+    # 右边
+    if not has_border:
+        for r in range(min_row, max_row + 1):
+            if _cell_has_border(ws.cell(r, max_col)):
+                has_border = True
+                break
+
+    if has_border:
+        style['borderWidth'] = 1
+        style['borderColor'] = '#000000'
+        style['borderStyle'] = 'solid'
+
+    style.setdefault('fontSize', 10)
+    if len(style) <= 2:  # only fontSize (+ maybe one more default)
+        return None
+    return style
+
 
 if __name__ == '__main__':
     from waitress import serve

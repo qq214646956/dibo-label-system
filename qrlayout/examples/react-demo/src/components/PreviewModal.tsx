@@ -9,25 +9,30 @@ interface Props {
     items: Record<string, any>[];
     printer: StickerPrinter;
     onClose: () => void;
+    coverLayout?: StickerLayout;
 }
 
-export function PreviewModal({ layout, items, printer, onClose }: Props) {
+export function PreviewModal({ layout, items, printer, onClose, coverLayout }: Props) {
     const [idx, setIdx] = useState(0);
     const [previewUrl, setPreviewUrl] = useState('');
     const canvasRef = useRef<HTMLCanvasElement>(null);
 
-    const total = items.length;
-    const item = items[idx];
+    const hasCover = !!coverLayout;
+    const total = hasCover ? items.length + 1 : items.length;
+    const isCoverPage = hasCover && idx === 0;
+    const labelIdx = hasCover ? idx - 1 : idx;
+    const item = isCoverPage ? { ...(items[0] || {}), _IDX: 0 } : items[labelIdx];
+    const activeLayout = isCoverPage ? coverLayout! : layout;
 
     const renderPreview = useCallback(async () => {
         if (!canvasRef.current) return;
         try {
-            const url = await printer.renderToDataURL(layout, item, { canvas: canvasRef.current, format: 'png' });
+            const url = await printer.renderToDataURL(activeLayout, item, { canvas: canvasRef.current, format: 'png' });
             setPreviewUrl(url);
         } catch (err) {
             console.error('预览渲染失败', err);
         }
-    }, [layout, item, printer]);
+    }, [activeLayout, item, printer]);
 
     useEffect(() => { renderPreview(); }, [renderPreview]);
 
@@ -42,29 +47,19 @@ export function PreviewModal({ layout, items, printer, onClose }: Props) {
     }, [onClose, idx, total]);
 
     const handleDownloadPNG = () => {
-        exportToPNG({ layout, items: [item], printer, baseFilename: 'delivery-label' });
+        exportToPNG({ layout: activeLayout, items: [item], printer, baseFilename: 'delivery-label' });
     };
 
-    // PDF 暂不可用（中文乱码问题）
-    // const handleDownloadPDF = async () => {
-    //     await exportToBatchPDF({ layout, items: [item], printer, baseFilename: 'delivery-label' });
-    // };
-
     const handleDownloadZPL = () => {
-        exportToZPLFile({ layout, items: [item], printer, baseFilename: 'delivery-label' });
+        exportToZPLFile({ layout: activeLayout, items: [item], printer, baseFilename: 'delivery-label' });
     };
 
     const handleBatchPNG = async () => {
-        await exportToPNG({ layout, items, printer, baseFilename: 'delivery-label' });
+        await exportToPNG({ layout: activeLayout, items, printer, baseFilename: 'delivery-label' });
     };
 
-    // PDF 暂不可用（中文乱码问题）
-    // const handleBatchPDF = async () => {
-    //     await exportToBatchPDF({ layout, items, printer, baseFilename: 'delivery-labels' });
-    // };
-
     const handleBatchZPL = () => {
-        exportToZPLFile({ layout, items, printer, baseFilename: 'delivery-labels' });
+        exportToZPLFile({ layout: activeLayout, items, printer, baseFilename: 'delivery-labels' });
     };
 
     const handleDirectPrint = async (single: boolean) => {
@@ -76,8 +71,7 @@ export function PreviewModal({ layout, items, printer, onClose }: Props) {
             <style>
                 *{margin:0;padding:0;box-sizing:border-box}
                 body{display:flex;flex-wrap:wrap;justify-content:center;padding:0}
-                .page{page-break-after:always;display:flex;justify-content:center;align-items:center;padding:0}
-                canvas{max-width:100%}
+                .page{page-break-after:always;display:flex;justify-content:center;align-items:flex-start;padding:0}
                 .noprint{display:block}
                 @media print{
                     .page{page-break-after:always}
@@ -88,18 +82,27 @@ export function PreviewModal({ layout, items, printer, onClose }: Props) {
             </style></head><body></body></html>
         `);
         win.document.close();
-        for (let i = 0; i < printItems.length; i++) {
+        const renderPage = async (pl: StickerLayout, data: any) => {
             const canvas = win.document.createElement('canvas');
+            const SCALE = 5;
+            await printer.renderToCanvas(pl, data, canvas, SCALE);
+            canvas.style.width = (canvas.width / SCALE) + 'px';
+            canvas.style.height = (canvas.height / SCALE) + 'px';
             const page = win.document.createElement('div');
             page.className = 'page';
             page.appendChild(canvas);
             win.document.body.appendChild(page);
-            await printer.renderToCanvas(layout, printItems[i], canvas);
+        };
+        if (coverLayout) {
+            await renderPage(coverLayout, { ...(printItems[0] || {}), _IDX: 0 });
         }
+        for (let i = 0; i < printItems.length; i++) {
+            await renderPage(single ? activeLayout! : layout, single ? item : items[i]);
+        }
+        const totalPages = (coverLayout ? 1 : 0) + printItems.length;
         const tip = Object.assign(win.document.createElement('div'), {
-            className: 'noprint',
-            style: 'text-align:center;padding:20px;color:#999;font-size:12px',
-            textContent: `共 ${printItems.length} 张标签 — 选择打印机后点击打印`
+            className: 'noprint', style: 'text-align:center;padding:20px;color:#999;font-size:12px',
+            textContent: `共 ${totalPages} 页 — 选择打印机后点击打印`
         });
         win.document.body.appendChild(tip);
         setTimeout(() => { win.print(); }, 300);
@@ -113,7 +116,7 @@ export function PreviewModal({ layout, items, printer, onClose }: Props) {
                     <div className="flex items-center gap-2">
                         <Eye size={20} className="text-indigo-500" />
                         <span className="font-semibold text-gray-900">标签打印预览</span>
-                        <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">{layout.name}</span>
+                        <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">{isCoverPage ? (coverLayout!.name + ' (封面)') : layout.name}</span>
                     </div>
                     <button onClick={onClose} className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors cursor-pointer">
                         <X size={18} className="text-gray-400" />

@@ -9,7 +9,7 @@ let ok = true;
 // 1. 复制 qrlayout-ui dist（中文翻译版）
 const uiSrc = resolve(__dirname, '..', '..', 'packages', 'ui', 'dist');
 const uiDest = resolve(__dirname, 'node_modules', 'qrlayout-ui', 'dist');
-for (const file of ['qrlayout-ui.js', 'qrlayout-ui.umd.js']) {
+for (const file of ['qrlayout-ui.js', 'qrlayout-ui.umd.js', 'index.d.ts', 'qrlayout-ui.css']) {
     const src = join(uiSrc, file);
     const dest = join(uiDest, file);
     if (existsSync(src)) {

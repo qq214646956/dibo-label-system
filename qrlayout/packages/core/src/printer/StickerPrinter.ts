@@ -7,6 +7,7 @@ export interface DataUrlOptions {
     format?: ImageFormat;
     quality?: number;
     canvas?: HTMLCanvasElement;
+    scale?: number;
 }
 
 export class StickerPrinter {
@@ -22,23 +23,36 @@ export class StickerPrinter {
         }
     }
 
-    // Generate random number for random-type elements
-    private generateRandom(element: StickerElement): string {
-        const min = element.randomMin ?? 0;
-        const max = element.randomMax ?? 100;
-        const decimals = element.randomDecimals ?? 0;
-        const val = min + Math.random() * (max - min);
+    // Parse variable content like "{{name}}"
+    private generateRandom(min: number, max: number, decimals: number, step: number): string {
+        const steps = Math.round((max - min) / step);
+        const val = min + Math.round(Math.random() * steps) * step;
         return val.toFixed(decimals);
     }
 
-    // Parse variable content like "{{name}}"
     private parseContent(content: string, data: StickerData, separator?: string): string {
         let processed = content;
         if (separator) {
-            // Replace spaces between braces or just consecutive braces with the separator
             processed = processed.replace(/\}\}\s*\{\{/g, `}}${separator}{{`);
         }
-        return processed.replace(/\{\{(.*?)\}\}/g, (_, key) => {
+        // Handle {{_SEQ:start,step,digits}} or {{_SEQ}}
+        processed = processed.replace(/\{\{_SEQ(?::(\d+),(\d+),(\d+))?\}\}/g, (_m, start, step, digits) => {
+            const s = start !== undefined ? parseInt(start) : 1;
+            const p = step !== undefined ? parseInt(step) : 1;
+            const d = digits !== undefined ? parseInt(digits) : 3;
+            const idx = Number((data as any)['_IDX'] ?? 0);
+            return String(s + idx * p).padStart(d, '0');
+        });
+        // Handle {{_RANDOM:min,max,dec,step}} or {{_RANDOM}}
+        processed = processed.replace(/\{\{_RANDOM(?::(-?[\d.]+),(-?[\d.]+),(\d+),(-?[\d.]+))?\}\}/g, (_m, m, x, d, s) => {
+            const min = m !== undefined ? parseFloat(m) : 0;
+            const max = x !== undefined ? parseFloat(x) : 100;
+            const dec = d !== undefined ? parseInt(d) : 0;
+            const step = s !== undefined ? parseFloat(s) : 1;
+            return this.generateRandom(min, max, dec, step);
+        });
+        // Handle regular {{variable}}
+        return processed.replace(/\{\{(.*?)\}\}/g, (_2, key) => {
             const trimmedKey = key.trim();
             return data[trimmedKey] !== undefined ? String(data[trimmedKey]) : "";
         });
@@ -49,14 +63,18 @@ export class StickerPrinter {
     public async renderToCanvas(
         layout: StickerLayout,
         data: StickerData,
-        canvas: HTMLCanvasElement
+        canvas: HTMLCanvasElement,
+        scale: number = 1
     ): Promise<void> {
         const ctx = canvas.getContext("2d");
         if (!ctx) throw new Error("Canvas context not available");
+        const s = scale;
 
-        // Setup Canvas Size
-        canvas.width = this.toPx(layout.width, layout.unit);
-        canvas.height = this.toPx(layout.height, layout.unit);
+        const pad = Math.round(this.toPx(2, 'mm') * s); // 2mm padding so borders don't clip
+
+        // Setup Canvas Size (× scale + padding)
+        canvas.width = Math.round(this.toPx(layout.width, layout.unit) * s) + pad * 2;
+        canvas.height = Math.round(this.toPx(layout.height, layout.unit) * s) + pad * 2;
 
         // Clear & Background
         ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -65,27 +83,23 @@ export class StickerPrinter {
             ctx.fillRect(0, 0, canvas.width, canvas.height);
         }
         if (layout.backgroundImage) {
-            await this.drawImage(ctx, layout.backgroundImage, 0, 0, canvas.width, canvas.height);
+            await this.drawImage(ctx, layout.backgroundImage, pad, pad, canvas.width - pad * 2, canvas.height - pad * 2);
         }
 
         // Render Elements
         for (const element of layout.elements) {
-            const x = this.toPx(element.x, layout.unit);
-            const y = this.toPx(element.y, layout.unit);
-            const w = this.toPx(element.w, layout.unit);
-            const h = this.toPx(element.h, layout.unit);
+            const x = this.toPx(element.x, layout.unit) * s + pad;
+            const y = this.toPx(element.y, layout.unit) * s + pad;
+            const w = this.toPx(element.w, layout.unit) * s;
+            const h = this.toPx(element.h, layout.unit) * s;
 
-            const filledContent = element.type === "random"
-                ? this.generateRandom(element)
-                : this.parseContent(
-                    element.content,
-                    data,
-                    element.type === "qr" ? element.qrSeparator : undefined
-                  );
+            const filledContent = this.parseContent(
+                element.content,
+                data,
+                element.type === "qr" ? element.qrSeparator : undefined
+              );
 
-            if (element.type === "random") {
-                this.drawText(ctx, element, filledContent, x, y, w, h);
-            } else if (element.type === "qr") {
+            if (element.type === "qr") {
                 if (filledContent) {
                     const qrUrl = await generateQR(filledContent);
                     await this.drawImage(ctx, qrUrl, x, y, w, h);
@@ -100,18 +114,18 @@ export class StickerPrinter {
                     await this.drawImage(ctx, element.content, x, y, w, h);
                 }
             } else if (element.type === "text") {
-                this.drawText(ctx, element, filledContent, x, y, w, h);
+                this.drawText(ctx, element, filledContent, x, y, w, h, s);
             }
             // Border rendering
             const st = element.style || {};
             if (st.borderWidth && st.borderWidth > 0) {
                 ctx.save();
                 ctx.strokeStyle = st.borderColor || "#000000";
-                ctx.lineWidth = st.borderWidth;
+                ctx.lineWidth = st.borderWidth * s;
                 if (st.borderStyle === "dashed") {
-                    ctx.setLineDash([6, 4]);
+                    ctx.setLineDash([6 * s, 4 * s]);
                 } else if (st.borderStyle === "dotted") {
-                    ctx.setLineDash([2, 3]);
+                    ctx.setLineDash([2 * s, 3 * s]);
                 }
                 ctx.strokeRect(x, y, w, h);
                 ctx.restore();
@@ -127,7 +141,7 @@ export class StickerPrinter {
         const format = (options?.format || "png").toLowerCase() as ImageFormat;
         const mime = format === "jpg" ? "image/jpeg" : `image/${format}`;
         const canvas = options?.canvas || this.createCanvas();
-        await this.renderToCanvas(layout, data, canvas);
+        await this.renderToCanvas(layout, data, canvas, options?.scale || 1);
         return canvas.toDataURL(mime, options?.quality);
     }
 
@@ -143,30 +157,34 @@ export class StickerPrinter {
         return results;
     }
 
-    private drawText(ctx: CanvasRenderingContext2D, el: StickerElement, text: string, x: number, y: number, w: number, h: number) {
+    private drawText(ctx: CanvasRenderingContext2D, el: StickerElement, text: string, x: number, y: number, w: number, h: number, scale: number = 1) {
         const style = el.style || {};
-        const fontSize = style.fontSize || 12;
+        const fontSize = (style.fontSize || 12) * scale;
         const fontFamily = style.fontFamily || "sans-serif";
         const fontWeight = style.fontWeight || "normal";
 
         ctx.font = `${fontWeight} ${fontSize}px ${fontFamily}`;
         ctx.fillStyle = style.color || "#000";
-
-        // Handle Vertical Alignment (textBaseline)
-        ctx.textBaseline = style.verticalAlign === "middle" ? "middle" : (style.verticalAlign === "bottom" ? "bottom" : "top");
         ctx.textAlign = (style.textAlign as CanvasTextAlign) || "left";
+        ctx.textBaseline = "top";
 
-        // Handle Horizontal Alignment X adjustment
-        let drawX = x;
-        if (style.textAlign === "center") drawX = x + w / 2;
-        if (style.textAlign === "right") drawX = x + w;
+        const lines = text.split('\n');
+        const lineHeight = fontSize * 1.3;
+        const totalTextH = lines.length * lineHeight;
 
-        // Handle Vertical Alignment Y adjustment
-        let drawY = y;
-        if (style.verticalAlign === "middle") drawY = y + h / 2;
-        if (style.verticalAlign === "bottom") drawY = y + h;
+        // Vertical alignment offset for multi-line text
+        const vAlign = style.verticalAlign || "top";
+        let startY = y;
+        if (vAlign === "middle") startY = y + (h - totalTextH) / 2;
+        else if (vAlign === "bottom") startY = y + h - totalTextH;
 
-        ctx.fillText(text, drawX, drawY);
+        for (let li = 0; li < lines.length; li++) {
+            let drawX = x;
+            if (style.textAlign === "center") drawX = x + w / 2;
+            if (style.textAlign === "right") drawX = x + w;
+
+            ctx.fillText(lines[li], drawX, startY + li * lineHeight);
+        }
     }
 
     private drawImage(ctx: CanvasRenderingContext2D, url: string, x: number, y: number, w: number, h: number): Promise<void> {
@@ -238,19 +256,17 @@ export class StickerPrinter {
             zpl += `^LL${heightDots}\n`;
 
             for (const element of layout.elements) {
-                const filledContent = element.type === "random"
-                    ? this.generateRandom(element)
-                    : this.parseContent(
-                        element.content,
-                        data,
-                        element.type === "qr" ? element.qrSeparator : undefined
-                      );
+                const filledContent = this.parseContent(
+                    element.content,
+                    data,
+                    element.type === "qr" ? element.qrSeparator : undefined
+                  );
                 const x = toDots(element.x, layout.unit);
                 const y = toDots(element.y, layout.unit);
 
                 zpl += `^FO${x},${y}`;
 
-                if (element.type === "text" || element.type === "random") {
+                if (element.type === "text") {
                     const style = element.style || {};
                     const fontSizePt = style.fontSize || 12;
                     const fontHeightDots = Math.round(fontSizePt * 2.8);

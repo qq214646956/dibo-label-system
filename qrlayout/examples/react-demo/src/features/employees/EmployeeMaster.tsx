@@ -94,6 +94,7 @@ export function EmployeeMaster() {
     const [allLabels, setAllLabels] = useState<StickerLayout[]>([]);
     const [printTypeFilter, setPrintTypeFilter] = useState<'label' | 'report'>('label');
     const [selectedLayoutId, setSelectedLayoutId] = useState('');
+    const [coverLayoutId, setCoverLayoutId] = useState('');
     const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
     const [showColumnSettings, setShowColumnSettings] = useState(false);
     const [showPreview, setShowPreview] = useState(false);
@@ -303,19 +304,16 @@ export function EmployeeMaster() {
         const ds = now.toISOString().split('T')[0];
         const ts = now.toTimeString().split(' ')[0];
         const dts = `${ds} ${ts}`;
-        const start = activeLayout?.seqStart ?? 1;
-        const step = activeLayout?.seqStep ?? 1;
-        const digits = activeLayout?.seqDigits ?? 3;
         return dataRef.current
             .filter((_, i) => selectedIds.has(i))
             .map((item, idx) => ({
                 ...item,
                 DATE: ds, TIME: ts, DATETIME: dts,
                 _IDX: idx,
-                _SEQ: String(start + idx * step).padStart(digits, '0'),
             }));
     };
     const activeLayout = labels.find(l => l.id === selectedLayoutId);
+    const coverLayout = allLabels.find(l => l.id === coverLayoutId);
     const hasSelection = selectedIds.size > 0;
     const hasLayout = !!selectedLayoutId;
 
@@ -348,8 +346,7 @@ export function EmployeeMaster() {
             <style>
                 *{margin:0;padding:0;box-sizing:border-box}
                 body{display:flex;flex-wrap:wrap;justify-content:center;padding:0}
-                .page{page-break-after:always;display:flex;justify-content:center;align-items:center;padding:0}
-                canvas{max-width:100%}
+                .page{page-break-after:always;display:flex;justify-content:center;align-items:flex-start;padding:0}
                 .noprint{display:block}
                 @media print{
                     .page{page-break-after:always}
@@ -361,19 +358,31 @@ export function EmployeeMaster() {
         `);
         win.document.close();
 
-        for (let i = 0; i < items.length; i++) {
+        const renderPage = async (layout: StickerLayout, data: any) => {
             const canvas = win.document.createElement('canvas');
+            const SCALE = 5;
+            await printer.current.renderToCanvas(layout, data, canvas, SCALE);
+            canvas.style.width = (canvas.width / SCALE) + 'px';
+            canvas.style.height = (canvas.height / SCALE) + 'px';
             const page = win.document.createElement('div');
             page.className = 'page';
             page.appendChild(canvas);
             win.document.body.appendChild(page);
-            await printer.current.renderToCanvas(activeLayout, items[i], canvas);
+        };
+
+        const coverData = items.length > 0 ? { ...items[0] } : {};
+        if (coverLayout) {
+            await renderPage(coverLayout, { ...coverData, _IDX: 0, _SEQ_STR: `共${items.length}张` });
+        }
+        for (let i = 0; i < items.length; i++) {
+            await renderPage(activeLayout!, items[i]);
         }
 
+        const totalPages = (coverLayout ? 1 : 0) + items.length;
         const tip = Object.assign(win.document.createElement('div'), {
             className: 'noprint',
             style: 'text-align:center;padding:20px;color:#999;font-size:12px',
-            textContent: `共 ${items.length} 张标签 — 选择打印机后点击打印`
+            textContent: `共 ${totalPages} 页 — 选择打印机后点击打印`
         });
         win.document.body.appendChild(tip);
 
@@ -509,6 +518,16 @@ export function EmployeeMaster() {
                                     value={selectedLayoutId}
                                     onChange={setSelectedLayoutId}
                                     placeholder={printTypeFilter === 'report' ? '搜索出货报告...' : '搜索打印模板...'}
+                                />
+                                <span className="text-xs text-gray-400">+封面</span>
+                                <SearchableSelect
+                                    options={[
+                                        { value: '', label: '无封面' },
+                                        ...allLabels.filter(l => l.targetEntity === 'delivery' && (l as any).templateType === 'cover').map(l => ({ value: l.id, label: l.name }))
+                                    ]}
+                                    value={coverLayoutId}
+                                    onChange={setCoverLayoutId}
+                                    placeholder="可选封面模板..."
                                 />
                             </div>
                             <div className="flex items-center gap-2">
@@ -701,6 +720,7 @@ export function EmployeeMaster() {
                     layout={activeLayout}
                     items={getSelectedItems()}
                     printer={printer.current}
+                    coverLayout={coverLayout}
                     onClose={() => setShowPreview(false)}
                 />
             )}

@@ -1,11 +1,11 @@
 // App.tsx
 import { useEffect, useRef, useState } from 'react';
-import { QRLayoutDesigner, type EntitySchema, type StickerLayout } from 'qrlayout-ui';
+import { QRLayoutDesigner, type EntitySchema, type StickerLayout, type StickerElement } from 'qrlayout-ui';
 import 'qrlayout-ui/style.css';
 import './App.css';
 import { LabelList } from './features/labels/LabelList';
 import { storage } from './services/storage';
-import { ArrowLeft, Tag, Truck, Home, Users, LogOut, History } from 'lucide-react';
+import { ArrowLeft, Tag, Truck, Home, Users, LogOut, History, FileUp } from 'lucide-react';
 import { EmployeeMaster } from './features/employees/EmployeeMaster';
 import { LandingPage } from './features/home/LandingPage';
 import { LoginPage, type UserInfo } from './features/auth/LoginPage';
@@ -104,6 +104,32 @@ const DEFAULT_NEW_LAYOUT: Omit<StickerLayout, 'id'> = {
 type MainView = 'home' | 'docs' | 'labels' | 'employees' | 'machines' | 'storage' | 'users' | 'logs';
 type SubView = 'list' | 'designer';
 
+function scaleElementsToFit(
+  elements: StickerElement[],
+  excelWidth: number,
+  excelHeight: number,
+  targetWidth: number,
+  targetHeight: number,
+): StickerElement[] {
+  const PAD = 2;
+  const effW = targetWidth - PAD * 2;
+  const effH = targetHeight - PAD * 2;
+  const scale = Math.min(effW / excelWidth, effH / excelHeight);
+  const offsetX = (targetWidth - excelWidth * scale) / 2;
+  return elements.map(el => ({
+    ...el,
+    x: el.x * scale + offsetX,
+    y: el.y * scale + PAD,
+    w: el.w * scale,
+    h: el.h * scale,
+    style: el.style ? {
+      ...el.style,
+      fontSize: el.style.fontSize ? Math.max(6, Math.round(el.style.fontSize * scale)) : undefined,
+      borderWidth: el.style.borderWidth ? Math.max(0.5, +(el.style.borderWidth * scale).toFixed(1)) : undefined,
+    } : undefined,
+  }));
+}
+
 function App() {
   const containerRef = useRef<HTMLDivElement>(null);
   const designerRef = useRef<QRLayoutDesigner | null>(null);
@@ -119,7 +145,7 @@ function App() {
   const [subView, setSubView] = useState<SubView>('list');
   const [labels, setLabels] = useState<StickerLayout[]>([]);
   const [editingLayout, setEditingLayout] = useState<StickerLayout | null>(null);
-  const [newTemplateType, setNewTemplateType] = useState<'label' | 'report'>('label');
+  const [newTemplateType, setNewTemplateType] = useState<'label' | 'report' | 'cover'>('label');
 
   const canDesign = user && (user.role === 'admin' || user.role === 'designer');
   const canManage = user?.role === 'admin';
@@ -129,6 +155,41 @@ function App() {
     sessionStorage.removeItem('user');
     setUser(null);
     setMainView('home');
+  };
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleImportExcel = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const formData = new FormData();
+    formData.append('file', file);
+    try {
+      const res = await fetch('/api/import-excel', { method: 'POST', body: formData });
+      const json = await res.json();
+      if (!json.success) {
+        alert('导入失败: ' + (json.message || '未知错误'));
+        e.target.value = '';
+        return;
+      }
+      const imported = json.data;
+      if (subView === 'designer' && designerRef.current) {
+        const { width, height } = designerRef.current.getLayout();
+        const scaled = scaleElementsToFit(imported.elements, imported.width, imported.height, width, height);
+        designerRef.current.loadElements(scaled);
+        designerRef.current.setName(imported.name);
+      } else {
+        setEditingLayout(json.data);
+        setSubView('designer');
+      }
+    } catch {
+      alert('导入失败: 服务器连接异常');
+    }
+    e.target.value = '';
   };
 
   // Load data on mount
@@ -194,7 +255,7 @@ function App() {
     };
   }, [subView, editingLayout, newTemplateType]);
 
-  const handleCreateNew = (type?: 'label' | 'report') => {
+  const handleCreateNew = (type?: 'label' | 'report' | 'cover') => {
     setNewTemplateType(type || 'label');
     setEditingLayout(null);
     setSubView('designer');
@@ -228,18 +289,23 @@ function App() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* Main Container */}
+      <input type="file" ref={fileInputRef} accept=".xlsx,.xls"
+        onChange={handleFileChange} style={{ display: 'none' }} />
 
       {/* If acting as Designer, cover full screen (or manage as modal) */}
       {subView === 'designer' ? (
         <div className="relative">
-          <button
-            onClick={handleBackToList}
-            className="fixed top-4 left-4 z-[9999] flex items-center gap-2 bg-white hover:bg-gray-100 text-gray-700 px-4 py-2 rounded-lg font-medium shadow-md transition-all border border-gray-200 cursor-pointer"
-          >
-            <ArrowLeft size={18} />
-            返回标签列表
-          </button>
+          <div className="fixed top-4 left-4 z-[9999] flex gap-2">
+            <button onClick={handleBackToList}
+              className="flex items-center gap-2 bg-white hover:bg-gray-100 text-gray-700 px-4 py-2 rounded-lg font-medium shadow-md transition-all border border-gray-200 cursor-pointer">
+              <ArrowLeft size={18} /> 返回标签列表
+            </button>
+            <button onClick={handleImportExcel}
+              className="flex items-center gap-2 bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg font-medium shadow-md transition-all cursor-pointer"
+              title="上传 Excel，自动缩放适配当前标签尺寸">
+              <FileUp size={18} /> 导入Excel
+            </button>
+          </div>
           <div
             className="designer-container"
             ref={containerRef}

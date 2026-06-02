@@ -36,6 +36,10 @@ export class QRLayoutDesigner {
     private isDragging = false;
     private printer: StickerPrinter;
     private onSaveCallback?: (layout: StickerLayout) => void;
+    private _keyHandler!: (e: KeyboardEvent) => void;
+    private history: string[] = [];
+    private historyIndex = -1;
+    private maxHistory = 50;
 
     // DOM Elements
     private canvas!: HTMLCanvasElement;
@@ -95,6 +99,7 @@ export class QRLayoutDesigner {
         this.renderSampleDataEditor();
         this.renderElementsList();
         this.updatePreview();
+        this.saveState();
     }
 
     private renderTemplate() {
@@ -107,6 +112,8 @@ export class QRLayoutDesigner {
                     <svg class="sun-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display: none;"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>
                     <svg class="moon-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
                 </button>
+                <button class="btn btn-icon btn-outline" data-action="undo" title="撤销 Ctrl+Z" style="font-size:14px;font-weight:700;">↩</button>
+                <button class="btn btn-icon btn-outline" data-action="redo" title="重做 Ctrl+Y" style="font-size:14px;font-weight:700;">↪</button>
                 <button class="btn btn-primary" data-action="save">保存布局</button>
             </div>
         </header>
@@ -122,6 +129,7 @@ export class QRLayoutDesigner {
                             <select data-input="templateType">
                                 <option value="label">标签（自由尺寸）</option>
                                 <option value="report">出货报告（A4 固定）</option>
+                                <option value="cover">封面标签</option>
                             </select>
                         </div>
                         <div class="form-group">
@@ -172,7 +180,6 @@ export class QRLayoutDesigner {
                                 <button class="btn btn-outline btn-sm" data-action="add-qr" title="添加二维码">+ 二维码</button>
                                 <button class="btn btn-outline btn-sm" data-action="add-barcode" title="添加条形码">+ 条码</button>
                                 <button class="btn btn-outline btn-sm" data-action="add-image" title="添加图片">+ 图片</button>
-                                <button class="btn btn-outline btn-sm" data-action="add-random" title="添加随机数">+ 随机数</button>
                                 <input type="file" id="image-file-input" accept="image/*" style="display:none">
                             </div>
                         </div>
@@ -298,6 +305,9 @@ export class QRLayoutDesigner {
 
     private bindEvents() {
         // Global Buttons
+        this.container.querySelector('[data-action="undo"]')?.addEventListener('click', () => this.undo());
+        this.container.querySelector('[data-action="redo"]')?.addEventListener('click', () => this.redo());
+
         this.container.querySelector('[data-action="toggle-theme"]')?.addEventListener('click', (e) => {
             this.isDarkMode = !this.isDarkMode;
             this.container.classList.toggle("dark-mode", this.isDarkMode);
@@ -392,6 +402,7 @@ export class QRLayoutDesigner {
             this.currentLayout.elements.push({ id, type: 'text', x: 10, y: 10, w: 40, h: 10, content: "新文本" });
             this.selectElement(id);
             this.updatePreview();
+            this.saveState();
         });
 
         this.container.querySelector('[data-action="add-qr"]')?.addEventListener('click', () => {
@@ -399,6 +410,7 @@ export class QRLayoutDesigner {
             this.currentLayout.elements.push({ id, type: 'qr', x: 5, y: 5, w: 20, h: 20, content: "{{id}}" });
             this.selectElement(id);
             this.updatePreview();
+            this.saveState();
         });
 
         this.container.querySelector('[data-action="add-barcode"]')?.addEventListener('click', () => {
@@ -406,16 +418,10 @@ export class QRLayoutDesigner {
             this.currentLayout.elements.push({ id, type: 'barcode', x: 5, y: 5, w: 50, h: 15, content: "{{MATNR}}", barcodeFormat: "CODE128" });
             this.selectElement(id);
             this.updatePreview();
+            this.saveState();
         });
 
         const imageInput = this.container.querySelector('#image-file-input') as HTMLInputElement;
-        this.container.querySelector('[data-action="add-random"]')?.addEventListener('click', () => {
-            const id = "r" + Date.now();
-            this.currentLayout.elements.push({ id, type: 'random', x: 10, y: 10, w: 30, h: 8, content: '', randomMin: 0, randomMax: 100, randomDecimals: 2 });
-            this.selectElement(id);
-            this.updatePreview();
-        });
-
         this.container.querySelector('[data-action="add-image"]')?.addEventListener('click', () => {
             imageInput?.click();
         });
@@ -428,6 +434,7 @@ export class QRLayoutDesigner {
                 this.currentLayout.elements.push({ id, type: 'image', x: 5, y: 5, w: 25, h: 25, content: reader.result as string });
                 this.selectElement(id);
                 this.updatePreview();
+                this.saveState();
                 imageInput.value = '';
             };
             reader.readAsDataURL(file);
@@ -437,18 +444,20 @@ export class QRLayoutDesigner {
             const src = this.currentLayout.elements.find(e => e.id === this.selectedElementId);
             if (!src) return;
             const clone: StickerElement = JSON.parse(JSON.stringify(src));
-            clone.id = (clone.type === 'qr' ? 'q' : clone.type === 'barcode' ? 'b' : clone.type === 'image' ? 'i' : clone.type === 'random' ? 'r' : 't') + Date.now();
+            clone.id = (clone.type === 'qr' ? 'q' : clone.type === 'barcode' ? 'b' : clone.type === 'image' ? 'i' : 't') + Date.now();
             clone.x += 5;
             clone.y += 5;
             this.currentLayout.elements.push(clone);
             this.selectElement(clone.id);
             this.updatePreview();
+            this.saveState();
         });
 
         this.container.querySelector('[data-action="delete-element"]')?.addEventListener('click', () => {
             this.currentLayout.elements = this.currentLayout.elements.filter(e => e.id !== this.selectedElementId);
             this.selectElement(null);
             this.updatePreview();
+            this.saveState();
         });
 
         // Resize observer to handle responsiveness
@@ -459,6 +468,25 @@ export class QRLayoutDesigner {
             }
             this.renderPropertyPanel();
         }).observe(this.container);
+
+        // Keyboard: undo/redo/delete
+        this._keyHandler = (e: KeyboardEvent) => {
+            if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
+                e.preventDefault(); this.undo();
+            } else if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
+                e.preventDefault(); this.redo();
+            } else if ((e.key === 'Delete' || e.key === 'Backspace') && this.selectedElementId) {
+                const tag = (e.target as HTMLElement).tagName;
+                if (tag !== 'INPUT' && tag !== 'TEXTAREA' && tag !== 'SELECT') {
+                    e.preventDefault();
+                    this.currentLayout.elements = this.currentLayout.elements.filter(el => el.id !== this.selectedElementId);
+                    this.saveState();
+                    this.selectElement(null);
+                    this.updatePreview();
+                }
+            }
+        };
+        document.addEventListener("keydown", this._keyHandler);
     }
 
     public async updatePreview() {
@@ -551,9 +579,6 @@ export class QRLayoutDesigner {
                 sub = '点击选择图片';
             } else if (el.type === 'qr') {
                 label = '二维码';
-            } else if (el.type === 'random') {
-                label = '随机数';
-                sub = `${el.randomMin ?? 0}-${el.randomMax ?? 100} (${el.randomDecimals ?? 0}位)`;
             } else if (el.type === 'text') {
                 label = '文本';
             }
@@ -614,26 +639,12 @@ export class QRLayoutDesigner {
                     <option value="ITF" ${el.barcodeFormat === 'ITF' ? 'selected' : ''}>ITF-14</option>
                 </select>
                 ` : ''}
-                ${el.type === 'random' ? `
-                <div class="form-row">
-                    <div class="form-group" style="flex:1;">
-                        <label>最小值</label>
-                        <input type="number" data-prop="randomMin" value="${el.randomMin ?? 0}" step="any">
-                    </div>
-                    <div class="form-group" style="flex:1;">
-                        <label>最大值</label>
-                        <input type="number" data-prop="randomMax" value="${el.randomMax ?? 100}" step="any">
-                    </div>
-                </div>
-                <div class="form-group">
-                    <label>小数位数</label>
-                    <input type="number" data-prop="randomDecimals" value="${el.randomDecimals ?? 0}" min="0" max="6" step="1">
-                </div>
-                ` : ''}
-                ${el.type !== 'random' && el.type !== 'image' ? `
+                ${el.type !== 'image' ? `
                 <label>内容</label>
                 <textarea data-prop="content-val" rows="2">${el.content}</textarea>
-                <div class="field-buttons" data-el="field-suggestions"></div>` : (el.type === 'random' ? `` : `<div style="margin-top:15px;"></div>`)}
+                <div class="field-buttons" data-el="field-suggestions"></div>
+                ${/\{\{_RANDOM/.test(el.content) ? `<p style="font-size:0.6rem;color:#8b5cf6;margin-top:4px;" id="random-preview">随机示例: ${(() => { const m = el.content.match(/\{\{_RANDOM(?::(-?[\d.]+),(-?[\d.]+),(\d+),(-?[\d.]+))?\}\}/); if (!m) return ''; const min=m[1]!==undefined?parseFloat(m[1]):0, max=m[2]!==undefined?parseFloat(m[2]):100, dec=m[3]!==undefined?parseInt(m[3]):0, step=m[4]!==undefined?parseFloat(m[4]):1; const steps=Math.round((max-min)/step); return (min+Math.round(Math.random()*steps)*step).toFixed(dec); })()}</p>` : ''}
+                ` : `<div style="margin-top:15px;"></div>`}
             </div>
             <div class="form-row">
                 <div class="form-group" style="flex:1;"><label>X (位置)</label><input type="number" step="0.01" data-prop="x" value="${el.x.toFixed(2)}"></div>
@@ -663,7 +674,7 @@ export class QRLayoutDesigner {
                     <option value="dotted" ${el.style?.borderStyle==='dotted'?'selected':''}>点线</option>
                 </select>
             </div>
-            ${(el.type === 'text' || el.type === 'random') ? `
+            ${(el.type === 'text') ? `
                 <div style="height: 1px; background: var(--border-color); margin: 16px 0;"></div>
                 <div class="form-row">
                     <div class="form-group" style="flex:1;">
@@ -695,25 +706,6 @@ export class QRLayoutDesigner {
                     </div>
                 </div>
             ` : ''}
-            <div style="height: 1px; background: var(--border-color); margin: 16px 0;"></div>
-            <div class="form-group">
-                <label>打印序列 ({{_SEQ}})</label>
-                <div class="form-row">
-                    <div class="form-group" style="flex:1;">
-                        <label style="font-size:0.625rem;">起始</label>
-                        <input type="number" data-prop="seqStart" value="${this.currentLayout.seqStart ?? 1}" step="1" min="0">
-                    </div>
-                    <div class="form-group" style="flex:1;">
-                        <label style="font-size:0.625rem;">步长</label>
-                        <input type="number" data-prop="seqStep" value="${this.currentLayout.seqStep ?? 1}" step="1" min="1">
-                    </div>
-                    <div class="form-group" style="flex:1;">
-                        <label style="font-size:0.625rem;">位数</label>
-                        <input type="number" data-prop="seqDigits" value="${this.currentLayout.seqDigits ?? 3}" step="1" min="1" max="10">
-                    </div>
-                </div>
-                <p style="font-size:0.6rem;color:var(--text-secondary);margin-top:4px;">内容中写 {{_SEQ}}，打印时替换为 001, 002, 003...</p>
-            </div>
         `;
 
         // Suggestions from Props (using this.entitySchemas)
@@ -721,17 +713,29 @@ export class QRLayoutDesigner {
         const entitySchema = this.currentLayout.targetEntity ? this.entitySchemas[this.currentLayout.targetEntity] : null;
 
         if (entitySchema && suggestions) {
-            // Add _SEQ pill first
+            // Add _SEQ pill
             const seqPill = document.createElement("div");
             seqPill.className = "field-pill";
             seqPill.style.cssText = "background:#eef2ff;border-color:#818cf8;color:#4f46e5;";
             seqPill.innerText = "+ _SEQ";
             seqPill.onclick = () => {
-                el.content += "{{_SEQ}}";
+                el.content += "{{_SEQ:1,1,3}}";
                 this.renderPropertyPanel();
                 this.updatePreview();
             };
             suggestions.appendChild(seqPill);
+
+            // Add _RANDOM pill
+            const randPill = document.createElement("div");
+            randPill.className = "field-pill";
+            randPill.style.cssText = "background:#fef3c7;border-color:#f59e0b;color:#b45309;";
+            randPill.innerText = "+ _RANDOM";
+            randPill.onclick = () => {
+                el.content += "{{_RANDOM:10,50,0,5}}";
+                this.renderPropertyPanel();
+                this.updatePreview();
+            };
+            suggestions.appendChild(randPill);
 
             entitySchema.fields.forEach(f => {
                 const pill = document.createElement("div");
@@ -781,7 +785,7 @@ export class QRLayoutDesigner {
                 this.renderElementsList();
             };
             input.addEventListener("input", handler);
-            input.addEventListener("change", handler);
+            input.addEventListener("change", () => { handler(); this.saveState(); });
         };
 
         link("content-val", "content");
@@ -794,20 +798,6 @@ export class QRLayoutDesigner {
         link("borderWidth", "style", true, "borderWidth");
         link("borderColor", "style", false, "borderColor");
         link("borderStyle", "style", false, "borderStyle");
-        link("randomMin", "randomMin", true);
-        link("randomMax", "randomMax", true);
-        link("randomDecimals", "randomDecimals", true);
-
-        // Sequence inputs → save to layout, not element
-        ["seqStart", "seqStep", "seqDigits"].forEach(key => {
-            const input = this.propContent.querySelector(`[data-prop="${key}"]`);
-            if (input) {
-                input.addEventListener("input", (e) => {
-                    (this.currentLayout as any)[key] = parseInt((e.target as HTMLInputElement).value) || (key === 'seqDigits' ? 3 : 1);
-                });
-            }
-        });
-
         this.propContent.querySelectorAll(".prop-align-h").forEach(btn => {
             btn.addEventListener("click", () => {
                 if (!el.style) el.style = {};
@@ -904,6 +894,7 @@ export class QRLayoutDesigner {
             this.setSnapGuide(null, null);
             this.updatePreview();
             this.renderPropertyPanel();
+            this.saveState();
             window.removeEventListener("mousemove", onMove);
             window.removeEventListener("mouseup", onUp);
         };
@@ -995,6 +986,7 @@ export class QRLayoutDesigner {
             this.setSnapGuide(null, null);
             this.updatePreview();
             this.renderPropertyPanel();
+            this.saveState();
             window.removeEventListener("mousemove", onMove);
             window.removeEventListener("mouseup", onUp);
         };
@@ -1002,7 +994,63 @@ export class QRLayoutDesigner {
         window.addEventListener("mouseup", onUp);
     }
 
+    public setName(name: string) {
+        this.currentLayout.name = name;
+        this.inputs.name.value = name;
+    }
+
+    public getLayout(): { width: number; height: number } {
+        return { width: this.currentLayout.width, height: this.currentLayout.height };
+    }
+
+    public loadElements(elements: StickerElement[]) {
+        const existingIds = new Set(this.currentLayout.elements.map(e => e.id));
+        elements.forEach(el => {
+            while (existingIds.has(el.id)) {
+                el.id = (parseInt(el.id, 36) || 0).toString(36) + 'x';
+            }
+            existingIds.add(el.id);
+        });
+        this.currentLayout.elements = elements;
+        this.selectedElementId = null;
+        this.renderElementsList();
+        this.renderPropertyPanel();
+        this.updatePreview();
+    }
+
+    private saveState() {
+        const snap = JSON.stringify(this.currentLayout);
+        if (this.historyIndex >= 0 && this.history[this.historyIndex] === snap) return;
+        this.history = this.history.slice(0, this.historyIndex + 1);
+        this.history.push(snap);
+        if (this.history.length > this.maxHistory) this.history.shift();
+        else this.historyIndex++;
+    }
+
+    private undo() {
+        if (this.historyIndex <= 0) return;
+        this.historyIndex--;
+        this.currentLayout = JSON.parse(this.history[this.historyIndex]);
+        this.syncInputsFromLayout();
+        this.renderElementsList();
+        this.renderPropertyPanel();
+        this.selectElement(null);
+        this.updatePreview();
+    }
+
+    private redo() {
+        if (this.historyIndex >= this.history.length - 1) return;
+        this.historyIndex++;
+        this.currentLayout = JSON.parse(this.history[this.historyIndex]);
+        this.syncInputsFromLayout();
+        this.renderElementsList();
+        this.renderPropertyPanel();
+        this.selectElement(null);
+        this.updatePreview();
+    }
+
     public destroy() {
+        document.removeEventListener("keydown", this._keyHandler);
         this.container.innerHTML = "";
         this.container.classList.remove("qrlayout-designer");
     }

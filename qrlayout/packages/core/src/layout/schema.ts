@@ -1,6 +1,6 @@
 export type Unit = "mm" | "px" | "cm" | "in";
 
-export type ElementType = "text" | "qr" | "barcode" | "image" | "random";
+export type ElementType = "text" | "qr" | "barcode" | "image";
 
 export interface ElementStyle {
     // Text specific
@@ -41,11 +41,6 @@ export interface StickerElement {
     // Barcode format (e.g. "CODE128", "EAN13", "UPC")
     barcodeFormat?: string;
 
-    // Random number range
-    randomMin?: number;
-    randomMax?: number;
-    randomDecimals?: number;
-
     style?: ElementStyle;
 }
 
@@ -64,13 +59,11 @@ export interface StickerLayout {
     backgroundColor?: string;
     backgroundImage?: string;
 
-    // Sequence config for {{_SEQ}} variable
-    seqStart?: number;
-    seqStep?: number;
-    seqDigits?: number;
-
     // Template type: "label" (free size) or "report" (A4 locked)
-    templateType?: "label" | "report";
+    templateType?: "label" | "report" | "cover";
+
+    // Optional cover/title page layout ID (printed first before the label)
+    coverLayoutId?: string;
 }
 
 export type ImageFormat = "png" | "jpeg" | "jpg" | "webp";

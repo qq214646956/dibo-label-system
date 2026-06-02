@@ -5,11 +5,10 @@ import { generateBarcode } from "./barcode/generator";
 
 export type PdfDoc = InstanceType<typeof jsPDF>;
 
-function generateRandom(el: any): string {
-    const min = el.randomMin ?? 0;
-    const max = el.randomMax ?? 100;
-    const dec = el.randomDecimals ?? 0;
-    return (min + Math.random() * (max - min)).toFixed(dec);
+function randomVal(min: number, max: number, dec: number, step: number): string {
+    const steps = Math.round((max - min) / step);
+    const val = min + Math.round(Math.random() * steps) * step;
+    return val.toFixed(dec);
 }
 
 function parseContent(content: string, data: StickerData, separator?: string): string {
@@ -17,7 +16,21 @@ function parseContent(content: string, data: StickerData, separator?: string): s
   if (separator) {
     processed = processed.replace(/\}\}\s*\{\{/g, `}}${separator}{{`);
   }
-  return processed.replace(/\{\{(.*?)\}\}/g, (_, key) => {
+  processed = processed.replace(/\{\{_SEQ(?::(\d+),(\d+),(\d+))?\}\}/g, (_m, start, step, digits) => {
+    const s = start !== undefined ? parseInt(start) : 1;
+    const p = step !== undefined ? parseInt(step) : 1;
+    const d = digits !== undefined ? parseInt(digits) : 3;
+    const idx = Number((data as any)['_IDX'] ?? 0);
+    return String(s + idx * p).padStart(d, '0');
+  });
+  processed = processed.replace(/\{\{_RANDOM(?::(-?[\d.]+),(-?[\d.]+),(\d+),(-?[\d.]+))?\}\}/g, (_m, m, x, d, s) => {
+    const min = m !== undefined ? parseFloat(m) : 0;
+    const max = x !== undefined ? parseFloat(x) : 100;
+    const dec = d !== undefined ? parseInt(d) : 0;
+    const step = s !== undefined ? parseFloat(s) : 1;
+    return randomVal(min, max, dec, step);
+  });
+  return processed.replace(/\{\{(.*?)\}\}/g, (_2, key) => {
     const trimmedKey = String(key).trim();
     return data[trimmedKey] !== undefined ? String(data[trimmedKey]) : "";
   });
@@ -53,16 +66,24 @@ function renderTextImage(
   const canvas = document.createElement("canvas");
   const ctx = canvas.getContext("2d")!;
   const size = fontSize * scale;
+  const lineH = Math.ceil(size * 1.3);
+  const lines = text.split('\n');
   ctx.font = `${fontWeight} ${size}px ${fontFamily}`;
-  const m = ctx.measureText(text);
-  const tw = Math.ceil(m.width) + 4;
-  const th = Math.ceil(size * 1.4);
+  let maxW = 0;
+  for (const line of lines) {
+    const m = ctx.measureText(line);
+    if (m.width > maxW) maxW = m.width;
+  }
+  const tw = Math.ceil(maxW) + 4;
+  const th = lines.length * lineH;
   canvas.width = tw;
   canvas.height = th;
   ctx.font = `${fontWeight} ${size}px ${fontFamily}`;
   ctx.fillStyle = color;
   ctx.textBaseline = "top";
-  ctx.fillText(text, 2, 0);
+  for (let li = 0; li < lines.length; li++) {
+    ctx.fillText(lines[li], 2, li * lineH);
+  }
   return { url: canvas.toDataURL("image/png"), w: tw / scale, h: th / scale };
 }
 
@@ -128,41 +149,6 @@ export async function exportToPDF(
         if (element.content) {
           doc.addImage(element.content, "PNG", x, y, w, h);
         }
-      } else if (element.type === "random") {
-        const val = generateRandom(element);
-        const style = element.style || {};
-        const fontSize = style.fontSize || 12;
-        const color = style.color || "#000000";
-        const fontFamily = style.fontFamily || "sans-serif";
-        const fontWeight = style.fontWeight || "normal";
-        const align = style.textAlign || "left";
-        const vAlign = style.verticalAlign || "top";
-        const img = renderTextImage(val, fontSize, color, fontFamily, fontWeight);
-        const imgW = img.w / ((() => {
-            switch (pdfUnit) {
-                case "mm": return 96 / 25.4;
-                case "cm": return 96 / 2.54;
-                case "in": return 96;
-                case "pt": return 96 / 72;
-                default: return 1;
-            }
-        })());
-        const imgH = img.h / ((() => {
-            switch (pdfUnit) {
-                case "mm": return 96 / 25.4;
-                case "cm": return 96 / 2.54;
-                case "in": return 96;
-                case "pt": return 96 / 72;
-                default: return 1;
-            }
-        })());
-        let drawX = x;
-        if (align === "center") drawX = x + (w - imgW) / 2;
-        if (align === "right") drawX = x + w - imgW;
-        let drawY = y;
-        if (vAlign === "middle") drawY = y + (h - imgH) / 2;
-        if (vAlign === "bottom") drawY = y + h - imgH;
-        doc.addImage(img.url, "PNG", drawX, drawY, imgW, imgH);
       } else if (element.type === "text") {
         const style = element.style || {};
         const fontSize = style.fontSize || 12;
