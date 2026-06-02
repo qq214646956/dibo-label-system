@@ -76,10 +76,12 @@ export function EmployeeMaster() {
     const cache = useRef(loadCache());
     const savedOrder = useRef(loadColumnOrder());
 
+    const today = new Date().toISOString().split('T')[0];
+
     const [ivWbstk, setIvWbstk] = useState(cache.current?.ivWbstk ?? '');
     const [ivCustName, setIvCustName] = useState(cache.current?.ivCustName ?? '');
-    const [ivWadatFrom, setIvWadatFrom] = useState(cache.current?.ivWadatFrom ?? '');
-    const [ivWadatTo, setIvWadatTo] = useState(cache.current?.ivWadatTo ?? '');
+    const [ivWadatFrom, setIvWadatFrom] = useState(cache.current?.ivWadatFrom ?? today);
+    const [ivWadatTo, setIvWadatTo] = useState(cache.current?.ivWadatTo ?? today);
     const [ivErdatFrom, setIvErdatFrom] = useState(cache.current?.ivErdatFrom ?? '');
     const [ivErdatTo, setIvErdatTo] = useState(cache.current?.ivErdatTo ?? '');
 
@@ -89,6 +91,8 @@ export function EmployeeMaster() {
     const [hasSearched, setHasSearched] = useState(!!cache.current);
 
     const [labels, setLabels] = useState<StickerLayout[]>([]);
+    const [allLabels, setAllLabels] = useState<StickerLayout[]>([]);
+    const [printTypeFilter, setPrintTypeFilter] = useState<'label' | 'report'>('label');
     const [selectedLayoutId, setSelectedLayoutId] = useState('');
     const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
     const [showColumnSettings, setShowColumnSettings] = useState(false);
@@ -110,12 +114,27 @@ export function EmployeeMaster() {
             await storage.initializeDefaults();
             const loadedLabels = await storage.getLabels();
             const deliveryLabels = loadedLabels.filter(l => l.targetEntity === 'delivery');
-            setLabels(deliveryLabels);
-            if (deliveryLabels.length > 0) {
-                setSelectedLayoutId(deliveryLabels[0].id);
+            setAllLabels(deliveryLabels);
+            const filtered = deliveryLabels.filter(l =>
+                (l as any).templateType !== 'report'
+            );
+            setLabels(filtered);
+            if (filtered.length > 0) {
+                setSelectedLayoutId(filtered[0].id);
             }
         })();
     }, []);
+
+    // Filter templates when type changes
+    useEffect(() => {
+        const filtered = allLabels.filter(l =>
+            printTypeFilter === 'report'
+                ? (l as any).templateType === 'report'
+                : (l as any).templateType !== 'report'
+        );
+        setLabels(filtered);
+        setSelectedLayoutId(filtered.length > 0 ? filtered[0].id : '');
+    }, [printTypeFilter, allLabels]);
 
     // Derived column keys from data, respecting saved order
     const allKeys = useMemo(() => {
@@ -198,10 +217,11 @@ export function EmployeeMaster() {
     };
 
     const handleReset = () => {
+        const t = new Date().toISOString().split('T')[0];
         setIvWbstk('');
         setIvCustName('');
-        setIvWadatFrom('');
-        setIvWadatTo('');
+        setIvWadatFrom(t);
+        setIvWadatTo(t);
         setIvErdatFrom('');
         setIvErdatTo('');
         setData([]);
@@ -283,9 +303,17 @@ export function EmployeeMaster() {
         const ds = now.toISOString().split('T')[0];
         const ts = now.toTimeString().split(' ')[0];
         const dts = `${ds} ${ts}`;
+        const start = activeLayout?.seqStart ?? 1;
+        const step = activeLayout?.seqStep ?? 1;
+        const digits = activeLayout?.seqDigits ?? 3;
         return dataRef.current
             .filter((_, i) => selectedIds.has(i))
-            .map((item, idx) => ({ ...item, DATE: ds, TIME: ts, DATETIME: dts, _IDX: idx }));
+            .map((item, idx) => ({
+                ...item,
+                DATE: ds, TIME: ts, DATETIME: dts,
+                _IDX: idx,
+                _SEQ: String(start + idx * step).padStart(digits, '0'),
+            }));
     };
     const activeLayout = labels.find(l => l.id === selectedLayoutId);
     const hasSelection = selectedIds.size > 0;
@@ -466,11 +494,21 @@ export function EmployeeMaster() {
                         <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-4 mb-6 flex flex-wrap items-center justify-between gap-4">
                             <div className="flex items-center gap-3">
                                 <span className="font-semibold bg-indigo-100 px-2 py-0.5 rounded text-indigo-900 text-sm">{selectedIds.size} 行已选</span>
+                                <div className="flex items-center gap-0.5 bg-white/80 rounded-lg border border-indigo-100 p-0.5">
+                                    <button
+                                        onClick={() => setPrintTypeFilter('label')}
+                                        className={`px-2.5 py-1 rounded-md text-xs font-medium transition-all cursor-pointer ${printTypeFilter === 'label' ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                                    >标签</button>
+                                    <button
+                                        onClick={() => setPrintTypeFilter('report')}
+                                        className={`px-2.5 py-1 rounded-md text-xs font-medium transition-all cursor-pointer ${printTypeFilter === 'report' ? 'bg-green-600 text-white shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                                    >报告</button>
+                                </div>
                                 <SearchableSelect
                                     options={labels.map(l => ({ value: l.id, label: l.name }))}
                                     value={selectedLayoutId}
                                     onChange={setSelectedLayoutId}
-                                    placeholder="搜索打印模板..."
+                                    placeholder={printTypeFilter === 'report' ? '搜索出货报告...' : '搜索打印模板...'}
                                 />
                             </div>
                             <div className="flex items-center gap-2">

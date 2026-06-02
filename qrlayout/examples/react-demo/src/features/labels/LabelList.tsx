@@ -1,14 +1,20 @@
 import React, { useState, useMemo } from 'react';
 import type { StickerLayout } from 'qrlayout-ui';
-import { Plus, Layout, Smartphone, Search, X } from 'lucide-react';
+import { Plus, Layout, Smartphone, Search, X, FileText } from 'lucide-react';
 import { Table, type Column } from '../../components/Table';
 
 interface LabelListProps {
     labels: StickerLayout[];
-    onCreateNew: () => void;
+    onCreateNew: (type?: 'label' | 'report') => void;
     onEdit: (label: StickerLayout) => void;
     onDelete: (id: string) => void;
 }
+
+const TYPE_OPTIONS = [
+    { value: '', label: '全部' },
+    { value: 'label', label: '标签' },
+    { value: 'report', label: '出货报告' },
+];
 
 export const LabelList: React.FC<LabelListProps> = ({
     labels,
@@ -17,12 +23,19 @@ export const LabelList: React.FC<LabelListProps> = ({
     onDelete
 }) => {
     const [query, setQuery] = useState('');
+    const [typeFilter, setTypeFilter] = useState('');
 
     const filtered = useMemo(() => {
-        if (!query.trim()) return labels;
-        const q = query.toLowerCase();
-        return labels.filter(l => l.name.toLowerCase().includes(q));
-    }, [labels, query]);
+        let result = labels;
+        if (typeFilter) {
+            result = result.filter(l => (l as any).templateType === typeFilter || (!(l as any).templateType && typeFilter === 'label'));
+        }
+        if (query.trim()) {
+            const q = query.toLowerCase();
+            result = result.filter(l => l.name.toLowerCase().includes(q));
+        }
+        return result;
+    }, [labels, query, typeFilter]);
 
     const handleDelete = (label: StickerLayout) => {
         if (confirm(`确定要删除 "${label.name}" 吗？`)) {
@@ -34,14 +47,22 @@ export const LabelList: React.FC<LabelListProps> = ({
         {
             header: '模板名称',
             accessorKey: 'name',
-            render: (_val, item) => (
-                <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-lg bg-blue-100 flex items-center justify-center text-blue-600">
-                        <Layout size={20} />
+            render: (_val, item) => {
+                const isReport = (item as any).templateType === 'report';
+                return (
+                    <div className="flex items-center gap-3">
+                        <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${isReport ? 'bg-green-100 text-green-600' : 'bg-blue-100 text-blue-600'}`}>
+                            {isReport ? <FileText size={20} /> : <Layout size={20} />}
+                        </div>
+                        <div>
+                            <div className="font-semibold text-gray-900">{item.name}</div>
+                            <span className={`text-xs px-1.5 py-0.5 rounded ${isReport ? 'bg-green-50 text-green-700' : 'bg-blue-50 text-blue-700'}`}>
+                                {isReport ? '出货报告' : '标签'}
+                            </span>
+                        </div>
                     </div>
-                    <div className="font-semibold text-gray-900">{item.name}</div>
-                </div>
-            )
+                );
+            }
         },
         {
             header: '目标实体',
@@ -81,18 +102,27 @@ export const LabelList: React.FC<LabelListProps> = ({
                     <h1 className="text-3xl font-bold text-gray-900 tracking-tight">标签模板</h1>
                     <p className="text-gray-500 mt-1">设计和管理您的条码布局</p>
                 </div>
-                <button
-                    onClick={onCreateNew}
-                    className="flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-xl font-medium transition-all shadow-sm hover:shadow-md active:scale-95 cursor-pointer"
-                >
-                    <Plus size={20} />
-                    <span>新建标签</span>
-                </button>
+                <div className="flex items-center gap-2">
+                    <button
+                        onClick={() => onCreateNew('label')}
+                        className="flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-5 py-3 rounded-xl font-medium transition-all shadow-sm hover:shadow-md active:scale-95 cursor-pointer"
+                    >
+                        <Plus size={20} />
+                        <span>新建标签</span>
+                    </button>
+                    <button
+                        onClick={() => onCreateNew('report')}
+                        className="flex items-center justify-center gap-2 bg-green-600 hover:bg-green-700 text-white px-5 py-3 rounded-xl font-medium transition-all shadow-sm hover:shadow-md active:scale-95 cursor-pointer"
+                    >
+                        <Plus size={20} />
+                        <span>新建报告</span>
+                    </button>
+                </div>
             </div>
 
-            {/* Search Bar */}
-            <div className="mb-6">
-                <div className="relative max-w-md">
+            {/* Search Bar + Filter */}
+            <div className="mb-6 flex flex-wrap items-center gap-3">
+                <div className="relative max-w-md flex-1 min-w-[200px]">
                     <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
                     <input
                         type="text"
@@ -107,8 +137,17 @@ export const LabelList: React.FC<LabelListProps> = ({
                         </button>
                     )}
                 </div>
-                {query && (
-                    <p className="text-xs text-gray-400 mt-1.5 ml-1">
+                <select
+                    className="px-3 py-2.5 border border-gray-300 rounded-xl text-sm bg-white focus:ring-2 focus:ring-blue-500 outline-none"
+                    value={typeFilter}
+                    onChange={e => setTypeFilter(e.target.value)}
+                >
+                    {TYPE_OPTIONS.map(opt => (
+                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                    ))}
+                </select>
+                {(query || typeFilter) && (
+                    <p className="text-xs text-gray-400">
                         找到 {filtered.length} 个匹配
                     </p>
                 )}

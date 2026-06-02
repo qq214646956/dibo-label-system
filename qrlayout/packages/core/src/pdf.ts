@@ -128,25 +128,6 @@ export async function exportToPDF(
         if (element.content) {
           doc.addImage(element.content, "PNG", x, y, w, h);
         }
-      } else if (element.type === "sequence") {
-        const start = element.sequenceStart ?? 1;
-        const step = element.sequenceStep ?? 1;
-        const digits = element.sequenceDigits ?? 3;
-        const idx = Number((data as any)['_IDX'] ?? 0);
-        const val = String(start + idx * step).padStart(digits, '0');
-        const style = element.style || {};
-        const fontSize = style.fontSize || 12;
-        const color = style.color || "#000000";
-        const fontFamily = style.fontFamily || "sans-serif";
-        const fontWeight = style.fontWeight || "normal";
-        const align = style.textAlign || "left";
-        const vAlign = style.verticalAlign || "top";
-        const img = renderTextImage(val, fontSize, color, fontFamily, fontWeight);
-        const ppu = (() => { switch(pdfUnit){case"mm":return 96/25.4;case"cm":return 96/2.54;case"in":return 96;case"pt":return 96/72;default:return 1;} })();
-        const iw=img.w/ppu, ih=img.h/ppu;
-        let dx=x; if(align==="center") dx=x+(w-iw)/2; if(align==="right") dx=x+w-iw;
-        let dy=y; if(vAlign==="middle") dy=y+(h-ih)/2; if(vAlign==="bottom") dy=y+h-ih;
-        doc.addImage(img.url, "PNG", dx, dy, iw, ih);
       } else if (element.type === "random") {
         const val = generateRandom(element);
         const style = element.style || {};

@@ -1,6 +1,6 @@
 export type Unit = "mm" | "px" | "cm" | "in";
 
-export type ElementType = "text" | "qr" | "barcode" | "image" | "random" | "sequence";
+export type ElementType = "text" | "qr" | "barcode" | "image" | "random";
 
 export interface ElementStyle {
     // Text specific
@@ -46,11 +46,6 @@ export interface StickerElement {
     randomMax?: number;
     randomDecimals?: number;
 
-    // Sequence settings
-    sequenceStart?: number;
-    sequenceStep?: number;
-    sequenceDigits?: number;
-
     style?: ElementStyle;
 }
 
@@ -68,6 +63,14 @@ export interface StickerLayout {
     // Optional background
     backgroundColor?: string;
     backgroundImage?: string;
+
+    // Sequence config for {{_SEQ}} variable
+    seqStart?: number;
+    seqStep?: number;
+    seqDigits?: number;
+
+    // Template type: "label" (free size) or "report" (A4 locked)
+    templateType?: "label" | "report";
 }
 
 export type ImageFormat = "png" | "jpeg" | "jpg" | "webp";

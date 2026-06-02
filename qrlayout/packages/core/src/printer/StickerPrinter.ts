@@ -22,15 +22,6 @@ export class StickerPrinter {
         }
     }
 
-    // Generate sequence number
-    private generateSequence(element: StickerElement, data: StickerData): string {
-        const start = element.sequenceStart ?? 1;
-        const step = element.sequenceStep ?? 1;
-        const digits = element.sequenceDigits ?? 3;
-        const idx = Number((data as any)['_IDX'] ?? 0);
-        return String(start + idx * step).padStart(digits, '0');
-    }
-
     // Generate random number for random-type elements
     private generateRandom(element: StickerElement): string {
         const min = element.randomMin ?? 0;
@@ -86,17 +77,13 @@ export class StickerPrinter {
 
             const filledContent = element.type === "random"
                 ? this.generateRandom(element)
-                : element.type === "sequence"
-                    ? this.generateSequence(element, data)
-                    : this.parseContent(
-                        element.content,
-                        data,
-                        element.type === "qr" ? element.qrSeparator : undefined
-                      );
+                : this.parseContent(
+                    element.content,
+                    data,
+                    element.type === "qr" ? element.qrSeparator : undefined
+                  );
 
-            if (element.type === "sequence") {
-                this.drawText(ctx, element, filledContent, x, y, w, h);
-            } else if (element.type === "random") {
+            if (element.type === "random") {
                 this.drawText(ctx, element, filledContent, x, y, w, h);
             } else if (element.type === "qr") {
                 if (filledContent) {
@@ -253,19 +240,17 @@ export class StickerPrinter {
             for (const element of layout.elements) {
                 const filledContent = element.type === "random"
                     ? this.generateRandom(element)
-                    : element.type === "sequence"
-                        ? this.generateSequence(element, data)
-                        : this.parseContent(
-                            element.content,
-                            data,
-                            element.type === "qr" ? element.qrSeparator : undefined
-                          );
+                    : this.parseContent(
+                        element.content,
+                        data,
+                        element.type === "qr" ? element.qrSeparator : undefined
+                      );
                 const x = toDots(element.x, layout.unit);
                 const y = toDots(element.y, layout.unit);
 
                 zpl += `^FO${x},${y}`;
 
-                if (element.type === "text" || element.type === "random" || element.type === "sequence") {
+                if (element.type === "text" || element.type === "random") {
                     const style = element.style || {};
                     const fontSizePt = style.fontSize || 12;
                     const fontHeightDots = Math.round(fontSizePt * 2.8);

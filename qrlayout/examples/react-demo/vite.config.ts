@@ -5,8 +5,13 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   plugins: [react()],
   optimizeDeps: {
-    include: ['qrcode'],
+    include: ['qrcode', 'jsbarcode'],
     exclude: ['qrlayout-core', 'qrlayout-ui'],
+  },
+  server: {
+    proxy: {
+      '/api': 'http://localhost:5000',
+    },
   },
   resolve: {
     alias: {

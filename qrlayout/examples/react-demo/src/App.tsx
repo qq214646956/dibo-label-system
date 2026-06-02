@@ -97,7 +97,8 @@ const DEFAULT_NEW_LAYOUT: Omit<StickerLayout, 'id'> = {
   height: 60,
   unit: "mm",
   backgroundColor: "#ffffff",
-  elements: []
+  elements: [],
+  templateType: "label",
 };
 
 type MainView = 'home' | 'docs' | 'labels' | 'employees' | 'machines' | 'storage' | 'users' | 'logs';
@@ -118,6 +119,7 @@ function App() {
   const [subView, setSubView] = useState<SubView>('list');
   const [labels, setLabels] = useState<StickerLayout[]>([]);
   const [editingLayout, setEditingLayout] = useState<StickerLayout | null>(null);
+  const [newTemplateType, setNewTemplateType] = useState<'label' | 'report'>('label');
 
   const canDesign = user && (user.role === 'admin' || user.role === 'designer');
   const canManage = user?.role === 'admin';
@@ -147,7 +149,15 @@ function App() {
 
     const initialLayout = editingLayout
       ? JSON.parse(JSON.stringify(editingLayout))  // 深拷贝，避免互相影响
-      : { ...DEFAULT_NEW_LAYOUT, id: crypto.randomUUID() };
+      : {
+          ...DEFAULT_NEW_LAYOUT,
+          id: crypto.randomUUID(),
+          templateType: newTemplateType,
+          name: newTemplateType === 'report' ? '新建出货报告' : '新建标签',
+          width: newTemplateType === 'report' ? 210 : DEFAULT_NEW_LAYOUT.width,
+          height: newTemplateType === 'report' ? 297 : DEFAULT_NEW_LAYOUT.height,
+          unit: newTemplateType === 'report' ? 'mm' : DEFAULT_NEW_LAYOUT.unit,
+        };
 
     const originalName = editingLayout?.name ?? '';
 
@@ -182,9 +192,10 @@ function App() {
         designerRef.current = null;
       }
     };
-  }, [subView, editingLayout]);
+  }, [subView, editingLayout, newTemplateType]);
 
-  const handleCreateNew = () => {
+  const handleCreateNew = (type?: 'label' | 'report') => {
+    setNewTemplateType(type || 'label');
     setEditingLayout(null);
     setSubView('designer');
   };

@@ -41,6 +41,8 @@ export class QRLayoutDesigner {
     private canvas!: HTMLCanvasElement;
 
     private editorOverlay!: HTMLDivElement;
+    private snapGuideV!: HTMLDivElement;
+    private snapGuideH!: HTMLDivElement;
     private elementsContainer!: HTMLDivElement;
     private propertyPanel!: HTMLDivElement;
     private propContent!: HTMLDivElement;
@@ -51,6 +53,7 @@ export class QRLayoutDesigner {
     // Inputs
     private inputs!: {
         entity: HTMLSelectElement;
+        templateType: HTMLSelectElement;
         name: HTMLInputElement;
         width: HTMLInputElement;
         height: HTMLInputElement;
@@ -115,6 +118,13 @@ export class QRLayoutDesigner {
                     <div class="sidebar-section">
                         <div class="sidebar-title">布局设置</div>
                         <div class="form-group">
+                            <label>模板类型</label>
+                            <select data-input="templateType">
+                                <option value="label">标签（自由尺寸）</option>
+                                <option value="report">出货报告（A4 固定）</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
                             <label>目标实体</label>
                             <select data-input="entity">
                                 <option value="">选择实体...</option>
@@ -163,7 +173,6 @@ export class QRLayoutDesigner {
                                 <button class="btn btn-outline btn-sm" data-action="add-barcode" title="添加条形码">+ 条码</button>
                                 <button class="btn btn-outline btn-sm" data-action="add-image" title="添加图片">+ 图片</button>
                                 <button class="btn btn-outline btn-sm" data-action="add-random" title="添加随机数">+ 随机数</button>
-                                <button class="btn btn-outline btn-sm" data-action="add-sequence" title="添加序列号">+ 序列</button>
                                 <input type="file" id="image-file-input" accept="image/*" style="display:none">
                             </div>
                         </div>
@@ -187,6 +196,8 @@ export class QRLayoutDesigner {
                     <div class="canvas-wrapper">
                         <canvas data-el="preview-canvas"></canvas>
                         <div data-el="editor-overlay" class="editor-overlay"></div>
+                        <div data-el="snap-guide-v" style="display:none;position:absolute;background:#4f46e5;pointer-events:none;z-index:100;width:1px;"></div>
+                        <div data-el="snap-guide-h" style="display:none;position:absolute;background:#4f46e5;pointer-events:none;z-index:100;height:1px;"></div>
                     </div>
                 </main>
 
@@ -195,7 +206,8 @@ export class QRLayoutDesigner {
                     <div class="sidebar-section">
                         <div class="sidebar-title">元素属性</div>
                         <div data-el="prop-content"></div>
-                        <button class="btn btn-danger btn-block" data-action="delete-element" style="margin-top: 24px">删除元素</button>
+                        <button class="btn btn-secondary btn-block" data-action="copy-element" style="margin-top: 16px">复制元素</button>
+                        <button class="btn btn-danger btn-block" data-action="delete-element" style="margin-top: 8px">删除元素</button>
                     </div>
                 </aside>
             </div>
@@ -228,6 +240,8 @@ export class QRLayoutDesigner {
 
         this.canvas = q('[data-el="preview-canvas"]') as HTMLCanvasElement;
         this.editorOverlay = q('[data-el="editor-overlay"]') as HTMLDivElement;
+        this.snapGuideV = q('[data-el="snap-guide-v"]') as HTMLDivElement;
+        this.snapGuideH = q('[data-el="snap-guide-h"]') as HTMLDivElement;
         this.elementsContainer = q('[data-el="elements-container"]') as HTMLDivElement;
         this.propertyPanel = q('[data-el="property-panel"]') as HTMLDivElement;
         this.propContent = q('[data-el="prop-content"]') as HTMLDivElement;
@@ -236,6 +250,7 @@ export class QRLayoutDesigner {
 
         this.inputs = {
             entity: qi('entity'),
+            templateType: qi('templateType'),
             name: qi('name'),
             width: qi('width'),
             height: qi('height'),
@@ -265,13 +280,18 @@ export class QRLayoutDesigner {
     }
 
     private syncInputsFromLayout() {
+        const isReport = this.currentLayout.templateType === 'report';
         this.inputs.entity.value = this.currentLayout.targetEntity || "";
+        this.inputs.templateType.value = this.currentLayout.templateType || 'label';
         this.inputs.name.value = this.currentLayout.name;
         this.inputs.width.value = String(this.currentLayout.width);
         this.inputs.height.value = String(this.currentLayout.height);
-        this.inputs.unit.value = this.currentLayout.unit;
-        this.inputs.labelWidth.innerText = `宽度 (${this.currentLayout.unit})`;
-        this.inputs.labelHeight.innerText = `高度 (${this.currentLayout.unit})`;
+        this.inputs.width.disabled = isReport;
+        this.inputs.height.disabled = isReport;
+        this.inputs.unit.value = isReport ? 'mm' : this.currentLayout.unit;
+        this.inputs.unit.disabled = isReport;
+        this.inputs.labelWidth.innerText = isReport ? '宽度 (A4 固定)' : `宽度 (${this.currentLayout.unit})`;
+        this.inputs.labelHeight.innerText = isReport ? '高度 (A4 固定)' : `高度 (${this.currentLayout.unit})`;
         this.inputs.bg.value = this.currentLayout.backgroundColor || "#ffffff";
         this.inputs.bgPreview.style.backgroundColor = this.inputs.bg.value;
     }
@@ -334,6 +354,24 @@ export class QRLayoutDesigner {
             this.renderPropertyPanel();
             this.updatePreview();
         };
+        this.inputs.templateType.onchange = (e) => {
+            const newType = (e.target as HTMLSelectElement).value as 'label' | 'report';
+            if (newType === 'report' && this.currentLayout.templateType !== 'report') {
+                if (!confirm('切换为出货报告将使用 A4 尺寸（210×297mm），是否继续？')) {
+                    this.inputs.templateType.value = this.currentLayout.templateType || 'label';
+                    return;
+                }
+                this.currentLayout.templateType = 'report';
+                this.currentLayout.width = 210;
+                this.currentLayout.height = 297;
+                this.currentLayout.unit = 'mm';
+            } else if (newType === 'label') {
+                this.currentLayout.templateType = 'label';
+                // Keep current size, just unlock
+            }
+            this.syncInputsFromLayout();
+            this.updatePreview();
+        };
         this.inputs.name.oninput = (e) => this.currentLayout.name = (e.target as HTMLInputElement).value;
         this.inputs.width.oninput = (e) => { this.currentLayout.width = parseFloat((e.target as HTMLInputElement).value) || 100; this.updatePreview(); };
         this.inputs.height.oninput = (e) => { this.currentLayout.height = parseFloat((e.target as HTMLInputElement).value) || 60; this.updatePreview(); };
@@ -348,7 +386,6 @@ export class QRLayoutDesigner {
             this.inputs.bgPreview.style.backgroundColor = this.currentLayout.backgroundColor;
             this.updatePreview();
         };
-
         // Element Actions
         this.container.querySelector('[data-action="add-text"]')?.addEventListener('click', () => {
             const id = "t" + Date.now();
@@ -372,13 +409,6 @@ export class QRLayoutDesigner {
         });
 
         const imageInput = this.container.querySelector('#image-file-input') as HTMLInputElement;
-        this.container.querySelector('[data-action="add-sequence"]')?.addEventListener('click', () => {
-            const id = "s" + Date.now();
-            this.currentLayout.elements.push({ id, type: 'sequence', x: 10, y: 10, w: 30, h: 8, content: '{{_IDX}}', sequenceStart: 1, sequenceStep: 1, sequenceDigits: 3 });
-            this.selectElement(id);
-            this.updatePreview();
-        });
-
         this.container.querySelector('[data-action="add-random"]')?.addEventListener('click', () => {
             const id = "r" + Date.now();
             this.currentLayout.elements.push({ id, type: 'random', x: 10, y: 10, w: 30, h: 8, content: '', randomMin: 0, randomMax: 100, randomDecimals: 2 });
@@ -401,6 +431,18 @@ export class QRLayoutDesigner {
                 imageInput.value = '';
             };
             reader.readAsDataURL(file);
+        });
+
+        this.container.querySelector('[data-action="copy-element"]')?.addEventListener('click', () => {
+            const src = this.currentLayout.elements.find(e => e.id === this.selectedElementId);
+            if (!src) return;
+            const clone: StickerElement = JSON.parse(JSON.stringify(src));
+            clone.id = (clone.type === 'qr' ? 'q' : clone.type === 'barcode' ? 'b' : clone.type === 'image' ? 'i' : clone.type === 'random' ? 'r' : 't') + Date.now();
+            clone.x += 5;
+            clone.y += 5;
+            this.currentLayout.elements.push(clone);
+            this.selectElement(clone.id);
+            this.updatePreview();
         });
 
         this.container.querySelector('[data-action="delete-element"]')?.addEventListener('click', () => {
@@ -509,9 +551,6 @@ export class QRLayoutDesigner {
                 sub = '点击选择图片';
             } else if (el.type === 'qr') {
                 label = '二维码';
-            } else if (el.type === 'sequence') {
-                label = '序列号';
-                sub = `起始${el.sequenceStart??1} +${el.sequenceStep??1} (${el.sequenceDigits??3}位)`;
             } else if (el.type === 'random') {
                 label = '随机数';
                 sub = `${el.randomMin ?? 0}-${el.randomMax ?? 100} (${el.randomDecimals ?? 0}位)`;
@@ -575,22 +614,6 @@ export class QRLayoutDesigner {
                     <option value="ITF" ${el.barcodeFormat === 'ITF' ? 'selected' : ''}>ITF-14</option>
                 </select>
                 ` : ''}
-                ${el.type === 'sequence' ? `
-                <div class="form-row">
-                    <div class="form-group" style="flex:1;">
-                        <label>起始值</label>
-                        <input type="number" data-prop="sequenceStart" value="${el.sequenceStart ?? 1}" step="1">
-                    </div>
-                    <div class="form-group" style="flex:1;">
-                        <label>步长</label>
-                        <input type="number" data-prop="sequenceStep" value="${el.sequenceStep ?? 1}" step="1">
-                    </div>
-                </div>
-                <div class="form-group">
-                    <label>位数（补零）</label>
-                    <input type="number" data-prop="sequenceDigits" value="${el.sequenceDigits ?? 3}" min="1" max="10" step="1">
-                </div>
-                ` : ''}
                 ${el.type === 'random' ? `
                 <div class="form-row">
                     <div class="form-group" style="flex:1;">
@@ -607,7 +630,7 @@ export class QRLayoutDesigner {
                     <input type="number" data-prop="randomDecimals" value="${el.randomDecimals ?? 0}" min="0" max="6" step="1">
                 </div>
                 ` : ''}
-                ${el.type !== 'random' && el.type !== 'sequence' && el.type !== 'image' ? `
+                ${el.type !== 'random' && el.type !== 'image' ? `
                 <label>内容</label>
                 <textarea data-prop="content-val" rows="2">${el.content}</textarea>
                 <div class="field-buttons" data-el="field-suggestions"></div>` : (el.type === 'random' ? `` : `<div style="margin-top:15px;"></div>`)}
@@ -640,7 +663,7 @@ export class QRLayoutDesigner {
                     <option value="dotted" ${el.style?.borderStyle==='dotted'?'selected':''}>点线</option>
                 </select>
             </div>
-            ${(el.type === 'text' || el.type === 'random' || el.type === 'sequence') ? `
+            ${(el.type === 'text' || el.type === 'random') ? `
                 <div style="height: 1px; background: var(--border-color); margin: 16px 0;"></div>
                 <div class="form-row">
                     <div class="form-group" style="flex:1;">
@@ -672,6 +695,25 @@ export class QRLayoutDesigner {
                     </div>
                 </div>
             ` : ''}
+            <div style="height: 1px; background: var(--border-color); margin: 16px 0;"></div>
+            <div class="form-group">
+                <label>打印序列 ({{_SEQ}})</label>
+                <div class="form-row">
+                    <div class="form-group" style="flex:1;">
+                        <label style="font-size:0.625rem;">起始</label>
+                        <input type="number" data-prop="seqStart" value="${this.currentLayout.seqStart ?? 1}" step="1" min="0">
+                    </div>
+                    <div class="form-group" style="flex:1;">
+                        <label style="font-size:0.625rem;">步长</label>
+                        <input type="number" data-prop="seqStep" value="${this.currentLayout.seqStep ?? 1}" step="1" min="1">
+                    </div>
+                    <div class="form-group" style="flex:1;">
+                        <label style="font-size:0.625rem;">位数</label>
+                        <input type="number" data-prop="seqDigits" value="${this.currentLayout.seqDigits ?? 3}" step="1" min="1" max="10">
+                    </div>
+                </div>
+                <p style="font-size:0.6rem;color:var(--text-secondary);margin-top:4px;">内容中写 {{_SEQ}}，打印时替换为 001, 002, 003...</p>
+            </div>
         `;
 
         // Suggestions from Props (using this.entitySchemas)
@@ -679,6 +721,18 @@ export class QRLayoutDesigner {
         const entitySchema = this.currentLayout.targetEntity ? this.entitySchemas[this.currentLayout.targetEntity] : null;
 
         if (entitySchema && suggestions) {
+            // Add _SEQ pill first
+            const seqPill = document.createElement("div");
+            seqPill.className = "field-pill";
+            seqPill.style.cssText = "background:#eef2ff;border-color:#818cf8;color:#4f46e5;";
+            seqPill.innerText = "+ _SEQ";
+            seqPill.onclick = () => {
+                el.content += "{{_SEQ}}";
+                this.renderPropertyPanel();
+                this.updatePreview();
+            };
+            suggestions.appendChild(seqPill);
+
             entitySchema.fields.forEach(f => {
                 const pill = document.createElement("div");
                 pill.className = "field-pill";
@@ -713,9 +767,9 @@ export class QRLayoutDesigner {
             const input = this.propContent.querySelector(`[data-prop="${key}"]`);
             if (!input) return;
 
-            input.addEventListener("input", (e) => {
-                const val = (e.target as HTMLInputElement).value;
-                const finalVal = isNum ? parseFloat(val) || 0 : val;
+            const handler = () => {
+                const val = (input as HTMLInputElement).value;
+                const finalVal = isNum ? (parseFloat(val) ?? 0) : val;
 
                 if (subField) {
                     if (!el.style) el.style = {};
@@ -724,7 +778,10 @@ export class QRLayoutDesigner {
                     (el as any)[field] = finalVal;
                 }
                 this.updatePreview();
-            });
+                this.renderElementsList();
+            };
+            input.addEventListener("input", handler);
+            input.addEventListener("change", handler);
         };
 
         link("content-val", "content");
@@ -740,9 +797,16 @@ export class QRLayoutDesigner {
         link("randomMin", "randomMin", true);
         link("randomMax", "randomMax", true);
         link("randomDecimals", "randomDecimals", true);
-        link("sequenceStart", "sequenceStart", true);
-        link("sequenceStep", "sequenceStep", true);
-        link("sequenceDigits", "sequenceDigits", true);
+
+        // Sequence inputs → save to layout, not element
+        ["seqStart", "seqStep", "seqDigits"].forEach(key => {
+            const input = this.propContent.querySelector(`[data-prop="${key}"]`);
+            if (input) {
+                input.addEventListener("input", (e) => {
+                    (this.currentLayout as any)[key] = parseInt((e.target as HTMLInputElement).value) || (key === 'seqDigits' ? 3 : 1);
+                });
+            }
+        });
 
         this.propContent.querySelectorAll(".prop-align-h").forEach(btn => {
             btn.addEventListener("click", () => {
@@ -805,10 +869,11 @@ export class QRLayoutDesigner {
             }
 
             item.classList.toggle("selected", this.selectedElementId === el.id);
-            item.style.left = `${el.x * this.pxPerUnit}px`;
-            item.style.top = `${el.y * this.pxPerUnit}px`;
-            item.style.width = `${el.w * this.pxPerUnit}px`;
-            item.style.height = `${el.h * this.pxPerUnit}px`;
+            const roundPx = (v: number) => Math.round(v * this.pxPerUnit);
+            item.style.left = `${roundPx(el.x)}px`;
+            item.style.top = `${roundPx(el.y)}px`;
+            item.style.width = `${roundPx(el.w)}px`;
+            item.style.height = `${roundPx(el.h)}px`;
         });
     }
 
@@ -820,14 +885,23 @@ export class QRLayoutDesigner {
         const initH = el.h;
 
         const onMove = (me: MouseEvent) => {
-            el.w = Math.max(1, initW + (me.clientX - startX) / this.pxPerUnit);
-            el.h = Math.max(1, initH + (me.clientY - startY) / this.pxPerUnit);
-            item.style.width = `${el.w * this.pxPerUnit}px`;
-            item.style.height = `${el.h * this.pxPerUnit}px`;
+            let newW = Math.max(1, initW + (me.clientX - startX) / this.pxPerUnit);
+            let newH = Math.max(1, initH + (me.clientY - startY) / this.pxPerUnit);
+
+            const snapW = this.calcSnap(el.x + newW, 0, el.id);
+            if (snapW.guide !== null) newW = Math.max(1, snapW.val - el.x);
+
+            el.w = newW;
+            el.h = newH;
+            item.style.width = `${Math.round(el.w * this.pxPerUnit)}px`;
+            item.style.height = `${Math.round(el.h * this.pxPerUnit)}px`;
+
+            this.setSnapGuide(snapW.guide, null);
             this.renderPropertyPanel();
         };
         const onUp = () => {
             this.isDragging = false;
+            this.setSnapGuide(null, null);
             this.updatePreview();
             this.renderPropertyPanel();
             window.removeEventListener("mousemove", onMove);
@@ -835,6 +909,63 @@ export class QRLayoutDesigner {
         };
         window.addEventListener("mousemove", onMove);
         window.addEventListener("mouseup", onUp);
+    }
+
+    private snapLines: { h: number | null; v: number | null } = { h: null, v: null };
+
+    private calcSnap(val: number, size: number, excludeId: string): { val: number; guide: number | null } {
+        const SNAP_PX = 10;
+        const snapUnits = SNAP_PX / (this.pxPerUnit || 1);
+        const OVERLAP = 0.5; // 0.5mm overlap to prevent anti-alias gaps
+        let bestVal = val;
+        let bestGuide: number | null = null;
+        let bestDist = snapUnits + 1;
+
+        for (const other of this.currentLayout.elements) {
+            if (other.id === excludeId) continue;
+            const my = [val, val + size, val + size / 2];
+            const ot = [other.x, other.x + other.w, other.x + other.w / 2];
+            for (let mi = 0; mi < my.length; mi++) {
+                for (let oi = 0; oi < ot.length; oi++) {
+                    const m = my[mi];
+                    const o = ot[oi];
+                    const d = Math.abs(m - o);
+                    if (d < bestDist) {
+                        bestDist = d;
+                        // Edge-to-edge: slight overlap to prevent sub-pixel gap
+                        const isEdge = mi < 2 && oi < 2;
+                        const adjust = isEdge ? (o >= m ? OVERLAP : -OVERLAP) : 0;
+                        bestVal = +(val + (o - m) + adjust).toFixed(3);
+                        bestGuide = o;
+                    }
+                }
+            }
+        }
+        return { val: bestDist <= snapUnits ? bestVal : val, guide: bestDist <= snapUnits ? bestGuide : null };
+    }
+
+    private setSnapGuide(xGuide: number | null, yGuide: number | null) {
+        const px = (v: number) => v * this.pxPerUnit;
+        const totalH = px(this.currentLayout.height);
+        const totalW = px(this.currentLayout.width);
+
+        if (xGuide !== null) {
+            this.snapGuideV.style.display = 'block';
+            this.snapGuideV.style.left = `${px(xGuide)}px`;
+            this.snapGuideV.style.top = '0';
+            this.snapGuideV.style.height = `${totalH}px`;
+        } else {
+            this.snapGuideV.style.display = 'none';
+        }
+
+        if (yGuide !== null) {
+            this.snapGuideH.style.display = 'block';
+            this.snapGuideH.style.left = '0';
+            this.snapGuideH.style.top = `${px(yGuide)}px`;
+            this.snapGuideH.style.width = `${totalW}px`;
+        } else {
+            this.snapGuideH.style.display = 'none';
+        }
     }
 
     private startElementDrag(e: MouseEvent, el: StickerElement, item: HTMLElement) {
@@ -845,14 +976,23 @@ export class QRLayoutDesigner {
         const initY = el.y;
 
         const onMove = (me: MouseEvent) => {
-            el.x = initX + (me.clientX - startX) / this.pxPerUnit;
-            el.y = initY + (me.clientY - startY) / this.pxPerUnit;
-            item.style.left = `${el.x * this.pxPerUnit}px`;
-            item.style.top = `${el.y * this.pxPerUnit}px`;
+            let newX = initX + (me.clientX - startX) / this.pxPerUnit;
+            let newY = initY + (me.clientY - startY) / this.pxPerUnit;
+
+            const snapX = this.calcSnap(newX, el.w, el.id);
+            newX = snapX.val;
+
+            el.x = newX;
+            el.y = newY;
+            item.style.left = `${Math.round(el.x * this.pxPerUnit)}px`;
+            item.style.top = `${Math.round(el.y * this.pxPerUnit)}px`;
+
+            this.setSnapGuide(snapX.guide, null);
             this.renderPropertyPanel();
         };
         const onUp = () => {
             this.isDragging = false;
+            this.setSnapGuide(null, null);
             this.updatePreview();
             this.renderPropertyPanel();
             window.removeEventListener("mousemove", onMove);
