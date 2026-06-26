@@ -146,11 +146,14 @@ def get_db():
     return mysql_pool.get_connection()
 
 
+# SAP 连接复用（避免每次请求都重新登录）
+_sap_conn = None
+
 def get_sap_connection():
+    global _sap_conn
     if not HAS_SAP:
         return None, "SAP 连接已禁用"
     try:
-        # 让 pyrfc 能找到同目录下的 SAP DLL
         import pyrfc
         pyrfc_dir = os.path.dirname(pyrfc.__file__)
         if hasattr(os, 'add_dll_directory'):
@@ -158,8 +161,18 @@ def get_sap_connection():
         else:
             os.environ['PATH'] = pyrfc_dir + ';' + os.environ.get('PATH', '')
         from pyrfc import Connection
-        conn = Connection(**SAP_CONFIG)
-        return conn, None
+
+        # 检查已有连接是否存活，不存活则重建
+        if _sap_conn is not None:
+            try:
+                _sap_conn.ping()
+            except Exception:
+                _sap_conn = None
+
+        if _sap_conn is None:
+            _sap_conn = Connection(**SAP_CONFIG)
+
+        return _sap_conn, None
     except ImportError:
         return None, "服务器未安装 SAP RFC 依赖（pyrfc）"
     except Exception as e:
@@ -180,23 +193,118 @@ def safe_value(val, default=''):
 
 @app.route('/api/templates', methods=['GET'])
 def get_templates():
+    """分页轻量列表 + 增量（?since=时间戳） + 搜索（?search=关键词） + 类型（?type=label|report|cover）"""
+    page = int(request.args.get('page', 1))
+    page_size = int(request.args.get('pageSize', 20))
+    since = request.args.get('since', '').strip()
+    entity = request.args.get('entity', '').strip()
+    search = request.args.get('search', '').strip()
+    type_filter = request.args.get('type', '').strip()
+
     try:
         db = get_db()
         cur = db.cursor(dictionary=True)
-        cur.execute("SELECT id, name, target_entity, layout_json FROM label_templates ORDER BY updated_at DESC")
+
+        # 构建 WHERE 条件
+        where_parts = []
+        where_params = []
+
+        if entity:
+            where_parts.append("target_entity = %s")
+            where_params.append(entity)
+        if search:
+            where_parts.append("name LIKE %s")
+            where_params.append(f"%{search}%")
+        if type_filter and type_filter in ('label', 'report', 'cover'):
+            where_parts.append("JSON_EXTRACT(layout_json, '$.templateType') = %s")
+            where_params.append(type_filter)
+        if since:
+            where_parts.append("updated_at > %s")
+            where_params.append(since)
+
+        where_clause = f" WHERE {' AND '.join(where_parts)}" if where_parts else ""
+
+        if since:
+            # 增量模式：不分页，同时检测删除
+            cur.execute(f"SELECT id, name, target_entity, layout_json, created_at, updated_at FROM label_templates {where_clause} ORDER BY updated_at DESC", where_params)
+            rows = cur.fetchall()
+            templates = [_make_light_template(r) for r in rows]
+
+            # 从日志表检测 since 以来的删除
+            deleted_ids = []
+            try:
+                cur.execute(
+                    "SELECT template_id FROM template_logs WHERE action='DELETE' AND created_at > %s",
+                    (since,))
+                deleted_ids = [r['template_id'] for r in cur.fetchall()]
+            except:
+                pass
+
+            cur.close()
+            db.close()
+            return jsonify({'success': True, 'data': templates, 'delta': True, 'deleted': deleted_ids})
+
+        # 分页模式（含搜索/类型）
+        cur.execute(f"SELECT COUNT(*) AS cnt FROM label_templates {where_clause}", where_params)
+        total = cur.fetchone()['cnt']
+
+        offset = (page - 1) * page_size
+        cur.execute(f"SELECT id, name, target_entity, layout_json, created_at, updated_at FROM label_templates {where_clause} ORDER BY updated_at DESC LIMIT %s OFFSET %s",
+                    where_params + [page_size, offset])
         rows = cur.fetchall()
-        templates = []
-        for r in rows:
-            t = json.loads(r['layout_json'])
-            t['id'] = r['id']
-            t['name'] = r['name']
-            t['targetEntity'] = r['target_entity']
-            templates.append(t)
+        templates = [_make_light_template(r) for r in rows]
+
         cur.close()
         db.close()
-        return jsonify({'success': True, 'data': templates})
+        return jsonify({'success': True, 'data': templates, 'total': total, 'page': page, 'pageSize': page_size})
     except Exception as e:
         return jsonify({'success': False, 'message': f'获取模板失败: {e}'}), 500
+
+
+def _make_light_template(r):
+    """从数据库行提取轻量元数据"""
+    try:
+        raw = json.loads(r['layout_json']) if r['layout_json'] else {}
+    except json.JSONDecodeError:
+        raw = {}
+    return {
+        'id': r['id'],
+        'name': r['name'],
+        'targetEntity': r.get('target_entity', raw.get('targetEntity', 'delivery')),
+        'templateType': raw.get('templateType', 'label'),
+        'width': raw.get('width', 100),
+        'height': raw.get('height', 60),
+        'unit': raw.get('unit', 'mm'),
+        'elementCount': len(raw.get('elements', [])),
+        'createdAt': r['created_at'].strftime('%Y-%m-%d %H:%M:%S') if r['created_at'] else '',
+        'updatedAt': r['updated_at'].strftime('%Y-%m-%d %H:%M:%S') if r['updated_at'] else '',
+    }
+
+
+@app.route('/api/templates/<tid>', methods=['GET'])
+def get_template_detail(tid):
+    """获取单个模板完整数据（含 elements）"""
+    try:
+        db = get_db()
+        cur = db.cursor(dictionary=True)
+        cur.execute("SELECT id, name, target_entity, layout_json, created_at, updated_at FROM label_templates WHERE id=%s", (tid,))
+        r = cur.fetchone()
+        cur.close()
+        db.close()
+        if not r:
+            return jsonify({'success': False, 'message': '模板不存在'}), 404
+        try:
+            t = json.loads(r['layout_json'])
+        except json.JSONDecodeError:
+            t = {}
+        t['id'] = r['id']
+        t['name'] = r['name']
+        t['targetEntity'] = r.get('target_entity', t.get('targetEntity', 'delivery'))
+        t['createdAt'] = r['created_at'].strftime('%Y-%m-%d %H:%M:%S') if r['created_at'] else ''
+        t['updatedAt'] = r['updated_at'].strftime('%Y-%m-%d %H:%M:%S') if r['updated_at'] else ''
+        return jsonify({'success': True, 'data': t})
+    except Exception as e:
+        return jsonify({'success': False, 'message': f'获取模板详情失败: {e}'}), 500
 
 
 def log_template_action(tid, name, action, operator):
@@ -219,11 +327,32 @@ def save_template():
         tid = data['id']
         name = data.get('name', '')
         target_entity = data.get('targetEntity', 'delivery')
+        template_type = data.get('templateType', 'label')
+        width = data.get('width', 100)
+        height = data.get('height', 60)
+        unit = data.get('unit', 'mm')
+        element_count = len(data.get('elements', []))
         operator = request.args.get('operator', '')
+        overwrite = request.args.get('overwrite', '')  # 覆盖模式
         layout_json = json.dumps(data, ensure_ascii=False)
 
         db = get_db()
         cur = db.cursor()
+
+        # 检查同名冲突（不同 id 但相同 name）
+        cur.execute("SELECT id FROM label_templates WHERE name=%s AND id!=%s", (name, tid))
+        dup = cur.fetchone()
+        if dup and not overwrite:
+            cur.close()
+            db.close()
+            return jsonify({'success': False, 'conflict': True, 'conflictName': name, 'conflictId': dup[0],
+                            'message': f'模板名称「{name}」已存在'}), 409
+
+        # 如果覆盖，先删冲突项
+        if dup and overwrite:
+            cur.execute("DELETE FROM label_templates WHERE id=%s", (dup[0],))
+            log_template_action(dup[0], name, 'DELETE-overwrite', operator)
+
         cur.execute("SELECT id FROM label_templates WHERE id=%s", (tid,))
         existed = cur.fetchone() is not None
         cur.execute(
@@ -236,7 +365,12 @@ def save_template():
         cur.close()
         db.close()
         log_template_action(tid, name, 'UPDATE' if existed else 'CREATE', operator)
-        return jsonify({'success': True, 'id': tid})
+        # 返回轻量元数据，前端可直接更新列表无需重新 GET
+        return jsonify({'success': True, 'id': tid, 'meta': {
+            'id': tid, 'name': name, 'targetEntity': target_entity,
+            'templateType': template_type, 'width': width, 'height': height, 'unit': unit,
+            'elementCount': element_count,
+        }})
     except Exception as e:
         return jsonify({'success': False, 'message': f'保存模板失败: {e}'}), 500
 
@@ -374,6 +508,7 @@ def delivery_details():
     iv_wadat_to = request.args.get('iv_wadat_to', '').strip()
     iv_erdat_from = request.args.get('iv_erdat_from', '').strip()
     iv_erdat_to = request.args.get('iv_erdat_to', '').strip()
+    iv_vbeln = request.args.get('iv_vbeln', '').strip()
 
     conn, error = get_sap_connection()
     if conn is None:
@@ -388,12 +523,38 @@ def delivery_details():
             IV_WADAT_TO=iv_wadat_to,
             IV_ERDAT_FROM=iv_erdat_from,
             IV_ERDAT_TO=iv_erdat_to,
-            ET_OUTPUT=[]
+            IV_VBELN=iv_vbeln,
+            ET_OUTPUT=[],
+            EX_TEXT=[]
         )
 
         raw_data = result.get('ET_OUTPUT', [])
+
+        # --- 处理 EX_TEXT（销售订单抬头文本），按 VGBEL 聚合 ---
+        ex_text_raw = result.get('EX_TEXT', [])
+        ex_text_map = {}  # {VGBEL: "line1\nline2\n..."}
+        if ex_text_raw:
+            for line in ex_text_raw:
+                vgbel = safe_value(line.get('VGBEL'))
+                # 尝试多种可能的文本字段名
+                text_line = safe_value(
+                    line.get('TDLINE') or
+                    line.get('TEXT') or
+                    line.get('TEXT_LINE') or
+                    line.get('TDLINE_TEXT') or
+                    line.get('LINE') or ''
+                )
+                if vgbel and text_line:
+                    if vgbel not in ex_text_map:
+                        ex_text_map[vgbel] = []
+                    ex_text_map[vgbel].append(text_line)
+
         records = []
         for item in raw_data:
+            vgbel = safe_value(item.get('VGBEL'))
+            # 匹配 EX_TEXT：按 VGBEL 取对应文本，多行用换行符拼接
+            ex_text = '\n'.join(ex_text_map.get(vgbel, [])) if vgbel else ''
+
             records.append({
                 'VBELN': safe_value(item.get('VBELN')),
                 'POSNR': safe_value(item.get('POSNR')),
@@ -425,6 +586,7 @@ def delivery_details():
                 'SORTL': safe_value(item.get('SORTL')),
                 'NAME1': safe_value(item.get('NAME1')),
                 'USERNAME': safe_value(item.get('USERNAME')),
+                'EX_TEXT': ex_text,
             })
 
         return jsonify({

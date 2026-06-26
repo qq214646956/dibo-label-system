@@ -165,12 +165,33 @@ export class StickerPrinter {
 
         ctx.font = `${fontWeight} ${fontSize}px ${fontFamily}`;
         ctx.fillStyle = style.color || "#000";
-        ctx.textAlign = (style.textAlign as CanvasTextAlign) || "left";
         ctx.textBaseline = "top";
 
-        const lines = text.split('\n');
+        // Word wrap: break long lines to fit element width
+        const rawLines = text.split('\n');
+        const wrappedLines: string[] = [];
+        for (const raw of rawLines) {
+            if (!raw) { wrappedLines.push(''); continue; }
+            if (ctx.measureText(raw).width <= w) {
+                wrappedLines.push(raw);
+            } else {
+                // Character-level wrapping (works for CJK and long English words)
+                let cur = '';
+                for (const ch of raw) {
+                    const test = cur + ch;
+                    if (ctx.measureText(test).width > w && cur.length > 0) {
+                        wrappedLines.push(cur);
+                        cur = ch;
+                    } else {
+                        cur = test;
+                    }
+                }
+                if (cur) wrappedLines.push(cur);
+            }
+        }
+
         const lineHeight = fontSize * 1.3;
-        const totalTextH = lines.length * lineHeight;
+        const totalTextH = wrappedLines.length * lineHeight;
 
         // Vertical alignment offset for multi-line text
         const vAlign = style.verticalAlign || "top";
@@ -178,12 +199,14 @@ export class StickerPrinter {
         if (vAlign === "middle") startY = y + (h - totalTextH) / 2;
         else if (vAlign === "bottom") startY = y + h - totalTextH;
 
-        for (let li = 0; li < lines.length; li++) {
+        for (let li = 0; li < wrappedLines.length; li++) {
+            const textAlign = style.textAlign || "left";
             let drawX = x;
-            if (style.textAlign === "center") drawX = x + w / 2;
-            if (style.textAlign === "right") drawX = x + w;
+            if (textAlign === "center") drawX = x + w / 2;
+            if (textAlign === "right") drawX = x + w;
 
-            ctx.fillText(lines[li], drawX, startY + li * lineHeight);
+            ctx.textAlign = textAlign as CanvasTextAlign;
+            ctx.fillText(wrappedLines[li], drawX, startY + li * lineHeight);
         }
     }
 

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { Search, RefreshCw, AlertCircle, Download, RotateCcw, Printer, Image as ImageIcon, Info, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, Settings2, Eye } from 'lucide-react';
+import { Search, RefreshCw, AlertCircle, Download, RotateCcw, Printer, Image as ImageIcon, Info, ChevronLeft, ChevronRight, Settings2, Eye, GripVertical } from 'lucide-react';
 import { SearchableSelect } from '../../components/SearchableSelect';
 import { PreviewModal } from '../../components/PreviewModal';
 import { StickerPrinter } from 'qrlayout-core';
@@ -30,7 +30,7 @@ const FIELD_LABELS: Record<string, string> = {
     MEINS: '单位', CHARG: '批次编号', ZFZSL: '辅助数量',
     ZBZCD2: '行业长度(M)', ZBZKD2: '行业宽度（MM）',
     SORTL: '客户简称', PM: '品名', ERDAT: '创建日期',
-    USERNAME: '过账人',
+    USERNAME: '过账人', EX_TEXT: '销售订单抬头文本',
 };
 
 type DataRow = Record<string, any>;
@@ -44,6 +44,7 @@ interface CacheData {
     ivWadatTo: string;
     ivErdatFrom: string;
     ivErdatTo: string;
+    ivVbeln: string;
 }
 
 function loadCache(): CacheData | null {
@@ -84,6 +85,7 @@ export function EmployeeMaster() {
     const [ivWadatTo, setIvWadatTo] = useState(cache.current?.ivWadatTo ?? today);
     const [ivErdatFrom, setIvErdatFrom] = useState(cache.current?.ivErdatFrom ?? '');
     const [ivErdatTo, setIvErdatTo] = useState(cache.current?.ivErdatTo ?? '');
+    const [ivVbeln, setIvVbeln] = useState(cache.current?.ivVbeln ?? '');
 
     const [data, setData] = useState<DataRow[]>(cache.current?.data ?? []);
     const [loading, setLoading] = useState(false);
@@ -98,6 +100,8 @@ export function EmployeeMaster() {
     const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
     const [showColumnSettings, setShowColumnSettings] = useState(false);
     const [showPreview, setShowPreview] = useState(false);
+    const [loadedLayout, setLoadedLayout] = useState<StickerLayout | null>(null);
+    const [loadedCover, setLoadedCover] = useState<StickerLayout | null>(null);
     const [page, setPage] = useState(1);
     const [pageSize, setPageSize] = useState(10);
     const printer = useRef(new StickerPrinter());
@@ -110,32 +114,114 @@ export function EmployeeMaster() {
     const [modifiedCells, setModifiedCells] = useState<Set<string>>(new Set());
     const editInputRef = useRef<HTMLInputElement>(null);
 
+    const lastFetchRef = useRef(Date.now());
+
     useEffect(() => {
         (async () => {
             await storage.initializeDefaults();
-            const loadedLabels = await storage.getLabels();
-            const deliveryLabels = loadedLabels.filter(l => l.targetEntity === 'delivery');
+            const res = await storage.getLabels(1, 9999, 'delivery');
+            const deliveryLabels = res.data;
             setAllLabels(deliveryLabels);
             const filtered = deliveryLabels.filter(l =>
-                (l as any).templateType !== 'report'
+                (l as any).templateType !== 'report' && (l as any).templateType !== 'cover'
             );
             setLabels(filtered);
             if (filtered.length > 0) {
                 setSelectedLayoutId(filtered[0].id);
             }
+            lastFetchRef.current = Date.now();
         })();
     }, []);
 
-    // Filter templates when type changes
+    // 多人协作：增量轮询（仅拉取最近变更 + 检测删除，<1KB）
+    useEffect(() => {
+        const timer = setInterval(async () => {
+            try {
+                const since = new Date(lastFetchRef.current - 60_000).toISOString();
+                const delta = await storage.getLabelsDelta(since, 'delivery');
+                if (delta.data.length > 0 || delta.deleted.length > 0) {
+                    lastFetchRef.current = Date.now();
+                    setAllLabels(prev => {
+                        // 1. 剔除增量更新的 + 被删除的
+                        const updateIds = new Set(delta.data.map(d => d.id));
+                        const deleteIds = new Set(delta.deleted);
+                        const kept = prev.filter(l => !updateIds.has(l.id) && !deleteIds.has(l.id));
+                        // 2. 合并增量新增/修改
+                        return [...delta.data, ...kept];
+                    });
+                }
+            } catch {}
+        }, 30_000);
+        return () => clearInterval(timer);
+    }, []);
+
+    // Cover templates sorted by date (newest first)
+    const coverTemplates = useMemo(() => {
+        return allLabels
+            .filter(l => l.targetEntity === 'delivery' && (l as any).templateType === 'cover')
+            .sort((a, b) => {
+                const da = (a as any).updatedAt || (a as any).createdAt || '';
+                const db = (b as any).updatedAt || (b as any).createdAt || '';
+                return db.localeCompare(da);
+            });
+    }, [allLabels]);
+
+    // Filter templates when type changes or list refreshed
     useEffect(() => {
         const filtered = allLabels.filter(l =>
             printTypeFilter === 'report'
                 ? (l as any).templateType === 'report'
-                : (l as any).templateType !== 'report'
+                : (l as any).templateType !== 'report' && (l as any).templateType !== 'cover'
         );
         setLabels(filtered);
-        setSelectedLayoutId(filtered.length > 0 ? filtered[0].id : '');
+        // 保留当前选中项（如果还存在），否则选第一个
+        setSelectedLayoutId(prev => {
+            if (prev && filtered.some(l => l.id === prev)) return prev;
+            return filtered.length > 0 ? filtered[0].id : '';
+        });
     }, [printTypeFilter, allLabels]);
+
+    // 选中模板后加载完整数据（含 elements）
+    useEffect(() => {
+        if (!selectedLayoutId) { setLoadedLayout(null); return; }
+        (async () => {
+            const full = await storage.getLabel(selectedLayoutId);
+            setLoadedLayout(full);
+        })();
+    }, [selectedLayoutId]);
+
+    // 选中封面后加载完整数据
+    useEffect(() => {
+        if (!coverLayoutId) { setLoadedCover(null); return; }
+        (async () => {
+            const full = await storage.getLabel(coverLayoutId);
+            setLoadedCover(full);
+        })();
+    }, [coverLayoutId]);
+
+    // Auto-select cover template
+    useEffect(() => {
+        if (printTypeFilter === 'report') {
+            setCoverLayoutId('');
+        } else if (coverTemplates.length > 0) {
+            setCoverLayoutId(prev => {
+                if (!prev || !coverTemplates.find(c => c.id === prev)) {
+                    return coverTemplates[0].id;
+                }
+                return prev;
+            });
+        } else {
+            setCoverLayoutId('');
+        }
+    }, [printTypeFilter, coverTemplates]);
+
+    // Cover selector options
+    const coverOptions = useMemo(() => {
+        if (printTypeFilter === 'report' || coverTemplates.length > 0) {
+            return coverTemplates.map(l => ({ value: l.id, label: l.name }));
+        }
+        return [{ value: '', label: '无封面' }];
+    }, [printTypeFilter, coverTemplates]);
 
     // Derived column keys from data, respecting saved order
     const allKeys = useMemo(() => {
@@ -162,21 +248,52 @@ export function EmployeeMaster() {
     // Persist cache whenever data + search params change
     useEffect(() => {
         if (data.length > 0) {
-            saveCache({ data, columnKeys: allKeys, ivWbstk, ivCustName, ivWadatFrom, ivWadatTo, ivErdatFrom, ivErdatTo });
+            saveCache({ data, columnKeys: allKeys, ivWbstk, ivCustName, ivWadatFrom, ivWadatTo, ivErdatFrom, ivErdatTo, ivVbeln });
         }
-    }, [data, allKeys, ivWbstk, ivCustName, ivWadatFrom, ivWadatTo, ivErdatFrom, ivErdatTo]);
+    }, [data, allKeys, ivWbstk, ivCustName, ivWadatFrom, ivWadatTo, ivErdatFrom, ivErdatTo, ivVbeln]);
 
-    const moveColumn = useCallback((fromIdx: number, direction: -1 | 1) => {
-        const toIdx = fromIdx + direction;
-        if (toIdx < 0 || toIdx >= allKeys.length) return;
+    const [dragSrcIdx, setDragSrcIdx] = useState<number | null>(null);
+    const [dragOverIdx, setDragOverIdx] = useState<number | null>(null);
+
+    const handleDragStart = useCallback((e: React.DragEvent, idx: number) => {
+        setDragSrcIdx(idx);
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', String(idx));
+        // 拖拽时显示半透明效果
+        (e.currentTarget as HTMLElement).style.opacity = '0.4';
+    }, []);
+
+    const handleDragEnd = useCallback((e: React.DragEvent) => {
+        (e.currentTarget as HTMLElement).style.opacity = '1';
+        setDragSrcIdx(null);
+        setDragOverIdx(null);
+    }, []);
+
+    const handleDragOver = useCallback((e: React.DragEvent, idx: number) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        setDragOverIdx(idx);
+    }, []);
+
+    const handleDragLeave = useCallback(() => {
+        setDragOverIdx(null);
+    }, []);
+
+    const handleDrop = useCallback((e: React.DragEvent, toIdx: number) => {
+        e.preventDefault();
+        setDragSrcIdx(null);
+        setDragOverIdx(null);
+        if (dragSrcIdx === null || dragSrcIdx === toIdx) return;
+
         const newOrder = [...allKeys];
-        [newOrder[fromIdx], newOrder[toIdx]] = [newOrder[toIdx], newOrder[fromIdx]];
+        const [moved] = newOrder.splice(dragSrcIdx, 1);
+        newOrder.splice(toIdx, 0, moved);
+
         savedOrder.current = newOrder;
         saveColumnOrder(newOrder);
-        setShowColumnSettings(false);
-        // Force re-render by updating data reference
+        // Force re-render
         setData([...data]);
-    }, [allKeys, data]);
+    }, [allKeys, data, dragSrcIdx]);
 
     const toSapDate = (dateStr: string) => dateStr.replace(/-/g, '');
 
@@ -197,6 +314,7 @@ export function EmployeeMaster() {
             if (ivWadatTo) params.set('iv_wadat_to', toSapDate(ivWadatTo));
             if (ivErdatFrom) params.set('iv_erdat_from', toSapDate(ivErdatFrom));
             if (ivErdatTo) params.set('iv_erdat_to', toSapDate(ivErdatTo));
+            if (ivVbeln) params.set('iv_vbeln', ivVbeln);
 
             const res = await fetch(`${API_BASE}/api/delivery-details?${params.toString()}`);
             const json = await res.json();
@@ -225,6 +343,7 @@ export function EmployeeMaster() {
         setIvWadatTo(t);
         setIvErdatFrom('');
         setIvErdatTo('');
+        setIvVbeln('');
         setData([]);
         setError('');
         setHasSearched(false);
@@ -310,31 +429,51 @@ export function EmployeeMaster() {
                 ...item,
                 DATE: ds, TIME: ts, DATETIME: dts,
                 _IDX: idx,
-            }));
+            } as DataRow));
     };
-    const activeLayout = labels.find(l => l.id === selectedLayoutId);
-    const coverLayout = allLabels.find(l => l.id === coverLayoutId);
     const hasSelection = selectedIds.size > 0;
     const hasLayout = !!selectedLayoutId;
 
     const handleExportPNG = async () => {
-        if (!activeLayout) return;
-        await exportToPNG({ layout: activeLayout, items: getSelectedItems(), printer: printer.current, baseFilename: 'delivery-label' });
+        if (!loadedLayout) return;
+        const items = getSelectedItems();
+        if (loadedCover && items[0]?.EX_TEXT) {
+            await printer.current.renderToDataURL(loadedCover, { ...items[0], _IDX: 0, _SEQ_STR: `共${items.length}张` }, { format: 'png' }).then(dataUrl => {
+                const link = document.createElement('a');
+                link.download = `delivery-cover-${Date.now()}.png`;
+                link.href = dataUrl;
+                link.click();
+            });
+        }
+        await exportToPNG({ layout: loadedLayout, items, printer: printer.current, baseFilename: 'delivery-label' });
     };
 
     // PDF 暂不可用（中文乱码问题）
     // const handleExportPDF = async () => {
-    //     if (!activeLayout) return;
-    //     await exportToBatchPDF({ layout: activeLayout, items: getSelectedItems(), printer: printer.current, baseFilename: 'delivery-labels' });
+    //     if (!loadedLayout) return;
+    //     await exportToBatchPDF({ layout: loadedLayout, items: getSelectedItems(), printer: printer.current, baseFilename: 'delivery-labels' });
     // };
 
     const handleExportZPL = () => {
-        if (!activeLayout) return;
-        exportToZPLFile({ layout: activeLayout, items: getSelectedItems(), printer: printer.current, baseFilename: 'delivery-labels' });
+        if (!loadedLayout) return;
+        const items = getSelectedItems();
+        if (loadedCover && items[0]?.EX_TEXT) {
+            const coverZPL = printer.current.exportToZPL(loadedCover, [{ ...items[0], _IDX: 0, _SEQ_STR: `共${items.length}张` }]);
+            const labelZPL = printer.current.exportToZPL(loadedLayout, items);
+            const blob = new Blob([[...coverZPL, ...labelZPL].join('\n')], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `delivery-labels-${Date.now()}.txt`;
+            a.click();
+            URL.revokeObjectURL(url);
+            return;
+        }
+        exportToZPLFile({ layout: loadedLayout, items, printer: printer.current, baseFilename: 'delivery-labels' });
     };
 
     const handleDirectPrint = async () => {
-        if (!activeLayout) return;
+        if (!loadedLayout) return;
         const items = getSelectedItems();
         if (items.length === 0) return;
 
@@ -371,14 +510,14 @@ export function EmployeeMaster() {
         };
 
         const coverData = items.length > 0 ? { ...items[0] } : {};
-        if (coverLayout) {
-            await renderPage(coverLayout, { ...coverData, _IDX: 0, _SEQ_STR: `共${items.length}张` });
+        if (loadedCover && items[0]?.EX_TEXT) {
+            await renderPage(loadedCover, { ...coverData, _IDX: 0, _SEQ_STR: `共${items.length}张` });
         }
         for (let i = 0; i < items.length; i++) {
-            await renderPage(activeLayout!, items[i]);
+            await renderPage(loadedLayout!, items[i]);
         }
 
-        const totalPages = (coverLayout ? 1 : 0) + items.length;
+        const totalPages = (loadedCover && items[0]?.EX_TEXT ? 1 : 0) + items.length;
         const tip = Object.assign(win.document.createElement('div'), {
             className: 'noprint',
             style: 'text-align:center;padding:20px;color:#999;font-size:12px',
@@ -428,6 +567,11 @@ export function EmployeeMaster() {
                         <label className="block text-sm font-medium text-gray-700">客户名称</label>
                         <input type="text" className="w-48 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none text-sm"
                             value={ivCustName} onChange={e => setIvCustName(e.target.value)} onKeyDown={handleKeyDown} placeholder="模糊匹配" />
+                    </div>
+                    <div className="space-y-1.5">
+                        <label className="block text-sm font-medium text-gray-700">交货单号</label>
+                        <input type="text" className="w-40 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none text-sm"
+                            value={ivVbeln} onChange={e => setIvVbeln(e.target.value)} onKeyDown={handleKeyDown} placeholder="精确查找" />
                     </div>
                     <div className="space-y-1.5">
                         <label className="block text-sm font-medium text-gray-700">发货日期从</label>
@@ -521,13 +665,11 @@ export function EmployeeMaster() {
                                 />
                                 <span className="text-xs text-gray-400">+封面</span>
                                 <SearchableSelect
-                                    options={[
-                                        { value: '', label: '无封面' },
-                                        ...allLabels.filter(l => l.targetEntity === 'delivery' && (l as any).templateType === 'cover').map(l => ({ value: l.id, label: l.name }))
-                                    ]}
+                                    options={coverOptions}
                                     value={coverLayoutId}
                                     onChange={setCoverLayoutId}
-                                    placeholder="可选封面模板..."
+                                    placeholder={printTypeFilter === 'report' ? '无封面' : coverTemplates.length > 0 ? '选择封面模板...' : '无封面'}
+                                    disabled={printTypeFilter === 'report' || coverTemplates.length === 0}
                                 />
                             </div>
                             <div className="flex items-center gap-2">
@@ -588,23 +730,22 @@ export function EmployeeMaster() {
                                         <Settings2 size={14} /> 列设置
                                     </button>
                                     {showColumnSettings && (
-                                        <div className="absolute right-0 top-full mt-1 z-50 bg-white border border-gray-200 rounded-xl shadow-lg w-64 max-h-80 overflow-y-auto">
+                                        <div className="absolute right-0 top-full mt-1 z-50 bg-white border border-gray-200 rounded-xl shadow-lg w-64 max-h-96 overflow-y-auto">
                                             <div className="px-3 py-2 border-b border-gray-100 text-xs font-semibold text-gray-500 uppercase">拖拽调整列顺序</div>
                                             {allKeys.map((key, idx) => (
-                                                <div key={key} className="flex items-center justify-between px-3 py-1.5 hover:bg-gray-50 text-sm">
-                                                    <span className="text-gray-700 truncate">{FIELD_LABELS[key] || key}</span>
-                                                    <div className="flex items-center gap-0.5 shrink-0">
-                                                        <button disabled={idx === 0}
-                                                            onClick={() => moveColumn(idx, -1)}
-                                                            className="p-0.5 rounded hover:bg-gray-200 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer">
-                                                            <ChevronUp size={14} />
-                                                        </button>
-                                                        <button disabled={idx === allKeys.length - 1}
-                                                            onClick={() => moveColumn(idx, 1)}
-                                                            className="p-0.5 rounded hover:bg-gray-200 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer">
-                                                            <ChevronDown size={14} />
-                                                        </button>
-                                                    </div>
+                                                <div key={key}
+                                                    draggable
+                                                    onDragStart={(e) => handleDragStart(e, idx)}
+                                                    onDragEnd={handleDragEnd}
+                                                    onDragOver={(e) => handleDragOver(e, idx)}
+                                                    onDragLeave={handleDragLeave}
+                                                    onDrop={(e) => handleDrop(e, idx)}
+                                                    className={`flex items-center gap-2 px-3 py-2 text-sm cursor-grab active:cursor-grabbing transition-colors select-none
+                                                        ${dragOverIdx === idx ? 'border-t-2 border-blue-400' : ''}
+                                                        ${dragSrcIdx === idx ? 'bg-blue-50' : 'hover:bg-gray-50'}
+                                                    `}>
+                                                    <GripVertical size={14} className="text-gray-400 shrink-0" />
+                                                    <span className="text-gray-700 truncate flex-1">{FIELD_LABELS[key] || key}</span>
                                                 </div>
                                             ))}
                                         </div>
@@ -647,6 +788,27 @@ export function EmployeeMaster() {
                                                     const cellKey = `${globalIdx}:${col.key}`;
                                                     const isEditing = editingCell?.rowIdx === globalIdx && editingCell?.colKey === col.key;
                                                     const isModified = modifiedCells.has(cellKey);
+                                                    const isExText = col.key === 'EX_TEXT';
+
+                                                    // EX_TEXT 列：只读多行文本框，不可编辑
+                                                    if (isExText) {
+                                                        const txt = formatValue(row[col.key]);
+                                                        return (
+                                                            <td
+                                                                key={col.key}
+                                                                className="px-3 py-2.5 text-gray-700"
+                                                            >
+                                                                <textarea
+                                                                    className="w-full min-w-[200px] px-2 py-1 border border-gray-200 rounded text-sm bg-gray-50 text-gray-700 resize-y"
+                                                                    rows={Math.max(2, (txt.match(/\n/g) || []).length + 1)}
+                                                                    value={txt}
+                                                                    readOnly
+                                                                    style={{ cursor: 'default', minHeight: '40px' }}
+                                                                />
+                                                            </td>
+                                                        );
+                                                    }
+
                                                     return (
                                                         <td
                                                             key={col.key}
@@ -715,12 +877,12 @@ export function EmployeeMaster() {
             )}
 
             {/* Preview Modal */}
-            {showPreview && activeLayout && (
+            {showPreview && loadedLayout && (
                 <PreviewModal
-                    layout={activeLayout}
+                    layout={loadedLayout}
                     items={getSelectedItems()}
                     printer={printer.current}
-                    coverLayout={coverLayout}
+                    coverLayout={loadedCover}
                     onClose={() => setShowPreview(false)}
                 />
             )}

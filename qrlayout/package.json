@@ -41,5 +41,8 @@
     "publish:all": "npm run publish:core && npm run publish:ui",
     "version:core": "npm --workspace packages/core version",
     "version:ui": "npm --workspace packages/ui version"
+  },
+  "devDependencies": {
+    "docx": "^9.7.1"
   }
 }

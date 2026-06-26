@@ -1,11 +1,19 @@
 import React, { useState, useMemo } from 'react';
 import type { StickerLayout } from 'qrlayout-ui';
-import { Plus, Layout, Smartphone, Search, X, FileText } from 'lucide-react';
+import { Plus, Layout, Smartphone, Search, X, FileText, ChevronLeft, ChevronRight } from 'lucide-react';
 import { Table, type Column } from '../../components/Table';
 
 interface LabelListProps {
     labels: StickerLayout[];
-    onCreateNew: (type?: 'label' | 'report') => void;
+    total: number;
+    page: number;
+    pageSize: number;
+    searchQuery: string;
+    typeFilter: string;
+    onSearchChange: (q: string) => void;
+    onTypeChange: (t: string) => void;
+    onPageChange: (page: number) => void;
+    onCreateNew: (type?: 'label' | 'report' | 'cover') => void;
     onEdit: (label: StickerLayout) => void;
     onDelete: (id: string) => void;
 }
@@ -18,25 +26,19 @@ const TYPE_OPTIONS = [
 ];
 
 export const LabelList: React.FC<LabelListProps> = ({
-    labels,
-    onCreateNew,
-    onEdit,
-    onDelete
+    labels, total, page, pageSize, searchQuery, typeFilter, onSearchChange, onTypeChange, onPageChange,
+    onCreateNew, onEdit, onDelete,
 }) => {
-    const [query, setQuery] = useState('');
-    const [typeFilter, setTypeFilter] = useState('');
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    const [localQuery, setLocalQuery] = useState(searchQuery);
 
-    const filtered = useMemo(() => {
-        let result = labels;
-        if (typeFilter) {
-            result = result.filter(l => (l as any).templateType === typeFilter || (!(l as any).templateType && typeFilter === 'label'));
-        }
-        if (query.trim()) {
-            const q = query.toLowerCase();
-            result = result.filter(l => l.name.toLowerCase().includes(q));
-        }
-        return result;
-    }, [labels, query, typeFilter]);
+    // 输入防抖：300ms 后触发服务端搜索
+    const timerRef = React.useRef<ReturnType<typeof setTimeout>>();
+    const handleQueryChange = (q: string) => {
+        setLocalQuery(q);
+        if (timerRef.current) clearTimeout(timerRef.current);
+        timerRef.current = setTimeout(() => onSearchChange(q), 300);
+    };
 
     const handleDelete = (label: StickerLayout) => {
         if (confirm(`确定要删除 "${label.name}" 吗？`)) {
@@ -90,10 +92,10 @@ export const LabelList: React.FC<LabelListProps> = ({
         },
         {
             header: '元素',
-            accessorKey: 'elements',
-            render: (val: any[]) => (
+            accessorKey: 'elementCount',
+            render: (val: number) => (
                 <span className="bg-gray-50 px-2 py-1 rounded border border-gray-100 text-sm text-gray-600">
-                    {val.length} 个元素
+                    {val || 0} 个元素
                 </span>
             )
         }
@@ -104,8 +106,8 @@ export const LabelList: React.FC<LabelListProps> = ({
             {/* Header Section */}
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
                 <div>
-                    <h1 className="text-3xl font-bold text-gray-900 tracking-tight">标签模板</h1>
-                    <p className="text-gray-500 mt-1">设计和管理您的条码布局</p>
+                    <h1 className="text-3xl font-bold text-gray-900 tracking-tight">标签与报告模版</h1>
+                    <p className="text-gray-500 mt-1">设计你的专属标签与报告</p>
                 </div>
                 <div className="flex items-center gap-2">
                     <button
@@ -139,12 +141,12 @@ export const LabelList: React.FC<LabelListProps> = ({
                     <input
                         type="text"
                         className="w-full pl-9 pr-8 py-2.5 border border-gray-300 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
-                        placeholder="搜索标签模板名称..."
-                        value={query}
-                        onChange={e => setQuery(e.target.value)}
+                        placeholder="搜索模版名称..."
+                        value={localQuery}
+                        onChange={e => handleQueryChange(e.target.value)}
                     />
-                    {query && (
-                        <button onClick={() => setQuery('')} className="absolute right-2 top-1/2 -translate-y-1/2 p-1 hover:bg-gray-100 rounded cursor-pointer">
+                    {localQuery && (
+                        <button onClick={() => { setLocalQuery(''); onSearchChange(''); }} className="absolute right-2 top-1/2 -translate-y-1/2 p-1 hover:bg-gray-100 rounded cursor-pointer">
                             <X size={14} className="text-gray-400" />
                         </button>
                     )}
@@ -152,27 +154,44 @@ export const LabelList: React.FC<LabelListProps> = ({
                 <select
                     className="px-3 py-2.5 border border-gray-300 rounded-xl text-sm bg-white focus:ring-2 focus:ring-blue-500 outline-none"
                     value={typeFilter}
-                    onChange={e => setTypeFilter(e.target.value)}
+                    onChange={e => onTypeChange(e.target.value)}
                 >
                     {TYPE_OPTIONS.map(opt => (
                         <option key={opt.value} value={opt.value}>{opt.label}</option>
                     ))}
                 </select>
-                {(query || typeFilter) && (
+                {(localQuery || typeFilter) && (
                     <p className="text-xs text-gray-400">
-                        找到 {filtered.length} 个匹配
+                        找到 {total} 个匹配
                     </p>
                 )}
             </div>
 
             {/* Content Table */}
             <Table
-                data={filtered}
+                data={labels}
                 columns={columns}
                 keyField="id"
                 onEdit={onEdit}
                 onDelete={handleDelete}
             />
+
+            {/* Pagination */}
+            {totalPages > 1 && (
+                <div className="flex items-center justify-center gap-3 mt-4">
+                    <button onClick={() => onPageChange(page - 1)} disabled={page <= 1}
+                        className="p-2 rounded-lg hover:bg-gray-200 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer">
+                        <ChevronLeft size={18} />
+                    </button>
+                    <span className="text-sm text-gray-600 min-w-[100px] text-center">
+                        第 {page} / {totalPages} 页（共 {total} 个模板）
+                    </span>
+                    <button onClick={() => onPageChange(page + 1)} disabled={page >= totalPages}
+                        className="p-2 rounded-lg hover:bg-gray-200 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer">
+                        <ChevronRight size={18} />
+                    </button>
+                </div>
+            )}
         </div>
     );
 };

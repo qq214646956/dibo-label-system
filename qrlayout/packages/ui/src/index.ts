@@ -40,6 +40,7 @@ export class QRLayoutDesigner {
     private history: string[] = [];
     private historyIndex = -1;
     private maxHistory = 50;
+    private _firstRender = true;
 
     // DOM Elements
     private canvas!: HTMLCanvasElement;
@@ -128,7 +129,7 @@ export class QRLayoutDesigner {
                             <label>模板类型</label>
                             <select data-input="templateType">
                                 <option value="label">标签（自由尺寸）</option>
-                                <option value="report">出货报告（A4 固定）</option>
+                                <option value="report">出货报告（A4 宽210mm）</option>
                                 <option value="cover">封面标签</option>
                             </select>
                         </div>
@@ -294,11 +295,10 @@ export class QRLayoutDesigner {
         this.inputs.width.value = String(this.currentLayout.width);
         this.inputs.height.value = String(this.currentLayout.height);
         this.inputs.width.disabled = isReport;
-        this.inputs.height.disabled = isReport;
         this.inputs.unit.value = isReport ? 'mm' : this.currentLayout.unit;
         this.inputs.unit.disabled = isReport;
-        this.inputs.labelWidth.innerText = isReport ? '宽度 (A4 固定)' : `宽度 (${this.currentLayout.unit})`;
-        this.inputs.labelHeight.innerText = isReport ? '高度 (A4 固定)' : `高度 (${this.currentLayout.unit})`;
+        this.inputs.labelWidth.innerText = isReport ? '宽度 (A4 210mm)' : `宽度 (${this.currentLayout.unit})`;
+        this.inputs.labelHeight.innerText = isReport ? '高度 (mm)' : `高度 (${this.currentLayout.unit})`;
         this.inputs.bg.value = this.currentLayout.backgroundColor || "#ffffff";
         this.inputs.bgPreview.style.backgroundColor = this.inputs.bg.value;
     }
@@ -367,13 +367,8 @@ export class QRLayoutDesigner {
         this.inputs.templateType.onchange = (e) => {
             const newType = (e.target as HTMLSelectElement).value as 'label' | 'report';
             if (newType === 'report' && this.currentLayout.templateType !== 'report') {
-                if (!confirm('切换为出货报告将使用 A4 尺寸（210×297mm），是否继续？')) {
-                    this.inputs.templateType.value = this.currentLayout.templateType || 'label';
-                    return;
-                }
                 this.currentLayout.templateType = 'report';
                 this.currentLayout.width = 210;
-                this.currentLayout.height = 297;
                 this.currentLayout.unit = 'mm';
             } else if (newType === 'label') {
                 this.currentLayout.templateType = 'label';
@@ -497,15 +492,34 @@ export class QRLayoutDesigner {
             : {};
 
         if (!this.isDragging) {
-            await this.printer.renderToCanvas(this.currentLayout, sampleData, this.canvas);
+            const SCALE = 2;
+            await this.printer.renderToCanvas(this.currentLayout, sampleData, this.canvas, SCALE);
+            // Shrink to 1x display — same pixel density as print, just smaller display
+            const dw = this.canvas.width / SCALE;
+            const dh = this.canvas.height / SCALE;
+            this.canvas.style.width = dw + 'px';
+            this.canvas.style.height = dh + 'px';
+            // Lock wrapper to same size so it doesn't constrain aspect ratio
+            const wrapper = this.canvas.parentElement as HTMLElement;
+            wrapper.style.width = dw + 'px';
+            wrapper.style.height = dh + 'px';
+
             const rect = this.canvas.getBoundingClientRect();
             if (rect.width > 0 && this.currentLayout.width > 0) {
-                this.pxPerUnit = rect.width / this.currentLayout.width;
+                // Canvas has 2mm fixed padding on each side; exclude it from pxPerUnit
+                const displayPad = (2 * 96) / 25.4; // 2mm in CSS px @ 96dpi (matching StickerPrinter.toPx)
+                this.pxPerUnit = (rect.width - displayPad * 2) / this.currentLayout.width;
             }
         }
 
         this.updateEditorOverlay();
-    }
+            // 首次渲染后复位滚动位置，避免大画布（如报告模板）顶部被 flexbox 居中裁切
+            if (this._firstRender) {
+                this._firstRender = false;
+                const pa = this.canvas.closest('.preview-area') as HTMLElement;
+                if (pa) { pa.scrollTop = 0; pa.scrollLeft = 0; }
+            }
+        }
 
     private showSampleDataModal() {
         this.renderSampleDataEditor();
@@ -859,11 +873,13 @@ export class QRLayoutDesigner {
             }
 
             item.classList.toggle("selected", this.selectedElementId === el.id);
-            const roundPx = (v: number) => Math.round(v * this.pxPerUnit);
-            item.style.left = `${roundPx(el.x)}px`;
-            item.style.top = `${roundPx(el.y)}px`;
-            item.style.width = `${roundPx(el.w)}px`;
-            item.style.height = `${roundPx(el.h)}px`;
+            const displayPad = (2 * 96) / 25.4;
+            const posPx = (v: number) => Math.round(v * this.pxPerUnit + displayPad);
+            const sizePx = (v: number) => Math.round(v * this.pxPerUnit);
+            item.style.left = `${posPx(el.x)}px`;
+            item.style.top = `${posPx(el.y)}px`;
+            item.style.width = `${sizePx(el.w)}px`;
+            item.style.height = `${sizePx(el.h)}px`;
         });
     }
 
@@ -936,24 +952,26 @@ export class QRLayoutDesigner {
     }
 
     private setSnapGuide(xGuide: number | null, yGuide: number | null) {
-        const px = (v: number) => v * this.pxPerUnit;
-        const totalH = px(this.currentLayout.height);
-        const totalW = px(this.currentLayout.width);
+        const displayPad = (2 * 96) / 25.4;
+        const px = (v: number) => v * this.pxPerUnit + displayPad;
+        const span = (v: number) => v * this.pxPerUnit;
+        const contentH = span(this.currentLayout.height);
+        const contentW = span(this.currentLayout.width);
 
         if (xGuide !== null) {
             this.snapGuideV.style.display = 'block';
             this.snapGuideV.style.left = `${px(xGuide)}px`;
-            this.snapGuideV.style.top = '0';
-            this.snapGuideV.style.height = `${totalH}px`;
+            this.snapGuideV.style.top = `${displayPad}px`;
+            this.snapGuideV.style.height = `${contentH}px`;
         } else {
             this.snapGuideV.style.display = 'none';
         }
 
         if (yGuide !== null) {
             this.snapGuideH.style.display = 'block';
-            this.snapGuideH.style.left = '0';
+            this.snapGuideH.style.left = `${displayPad}px`;
             this.snapGuideH.style.top = `${px(yGuide)}px`;
-            this.snapGuideH.style.width = `${totalW}px`;
+            this.snapGuideH.style.width = `${contentW}px`;
         } else {
             this.snapGuideH.style.display = 'none';
         }
@@ -975,8 +993,9 @@ export class QRLayoutDesigner {
 
             el.x = newX;
             el.y = newY;
-            item.style.left = `${Math.round(el.x * this.pxPerUnit)}px`;
-            item.style.top = `${Math.round(el.y * this.pxPerUnit)}px`;
+            const displayPad = (2 * 96) / 25.4;
+            item.style.left = `${Math.round(el.x * this.pxPerUnit + displayPad)}px`;
+            item.style.top = `${Math.round(el.y * this.pxPerUnit + displayPad)}px`;
 
             this.setSnapGuide(snapX.guide, null);
             this.renderPropertyPanel();

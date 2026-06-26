@@ -151,7 +151,7 @@ export function LandingPage({ onNavigate }: LandingPageProps) {
           <div className="grid grid-cols-1 gap-12 lg:grid-cols-2">
             <div>
               <h3 className="text-2xl font-bold text-gray-900 mb-6 text-center lg:text-left">
-                为什么选择条码布局设计器？
+                为什么选择客户出货自助系统？
               </h3>
               <div className="space-y-6 max-w-xl mx-auto lg:mx-0">
                 <div className="flex gap-4">

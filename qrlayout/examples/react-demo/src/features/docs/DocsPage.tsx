@@ -72,9 +72,9 @@ export function DocsPage() {
 
           {/* Overview */}
           <section id="overview" className="mb-16">
-            <h1 className="text-4xl font-bold text-gray-900 mb-4">条码布局设计器 — 文档</h1>
+            <h1 className="text-4xl font-bold text-gray-900 mb-4">客户出货自助系统 — 文档</h1>
             <p className="text-lg text-gray-600">
-              条码布局设计器是一个用于设计和打印专业条码标签贴纸的开源工具包。它包含两个互补的 npm 包：
+              客户出货自助系统是一个用于设计和打印专业标签与出货报告的工具平台。它包含两个互补的 npm 包：
             </p>
             <div className="grid sm:grid-cols-2 gap-4 mt-6 not-prose">
               <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-xl p-5 border border-blue-100">

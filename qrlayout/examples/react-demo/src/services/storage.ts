@@ -32,26 +32,61 @@ export interface Bin {
 
 export const storage = {
     // Template API (MySQL via Flask)
-    getLabels: async (): Promise<StickerLayout[]> => {
+    // 分页列表接口（轻量，不含 elements）
+    getLabels: async (page = 1, pageSize = 20, entity = '', search = '', type = ''): Promise<{ data: StickerLayout[]; total: number; page: number; pageSize: number }> => {
         try {
-            const res = await fetch(`${API_BASE}/api/templates`);
+            const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
+            if (entity) params.set('entity', entity);
+            if (search) params.set('search', search);
+            if (type) params.set('type', type);
+            const res = await fetch(`${API_BASE}/api/templates?${params}`);
             const json = await res.json();
-            return json.success ? json.data : [];
+            return json.success ? { data: json.data, total: json.total, page: json.page, pageSize: json.pageSize } : { data: [], total: 0, page: 1, pageSize: 20 };
         } catch {
-            return [];
+            return { data: [], total: 0, page: 1, pageSize: 20 };
         }
     },
 
-    addLabel: async (label: StickerLayout): Promise<void> => {
+    // 增量接口（返回变更+被删除的ID列表）
+    getLabelsDelta: async (since: string, entity = ''): Promise<{ data: StickerLayout[]; deleted: string[] }> => {
+        try {
+            const params = new URLSearchParams({ since });
+            if (entity) params.set('entity', entity);
+            const res = await fetch(`${API_BASE}/api/templates?${params}`);
+            const json = await res.json();
+            return { data: json.success ? json.data : [], deleted: json.deleted || [] };
+        } catch {
+            return { data: [], deleted: [] };
+        }
+    },
+
+    // 详情接口（含 elements）
+    getLabel: async (id: string): Promise<StickerLayout | null> => {
+        try {
+            const res = await fetch(`${API_BASE}/api/templates/${id}`);
+            const json = await res.json();
+            return json.success ? json.data : null;
+        } catch {
+            return null;
+        }
+    },
+
+    addLabel: async (label: StickerLayout, overwrite = false): Promise<{ ok: boolean; conflict?: boolean; conflictId?: string }> => {
         try {
             const user = JSON.parse(sessionStorage.getItem('user') || '{}');
             const operator = user.display_name || '';
-            await fetch(`${API_BASE}/api/templates?operator=${encodeURIComponent(operator)}`, {
+            const qs = overwrite ? `?operator=${encodeURIComponent(operator)}&overwrite=1` : `?operator=${encodeURIComponent(operator)}`;
+            const res = await fetch(`${API_BASE}/api/templates${qs}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(label),
             });
-        } catch {}
+            if (res.status === 409) {
+                const json = await res.json();
+                return { ok: false, conflict: true, conflictId: json.conflictId };
+            }
+            return { ok: res.ok };
+        } catch { return { ok: false }; }
     },
 
     deleteLabel: async (id: string): Promise<void> => {
@@ -150,8 +185,8 @@ export const storage = {
 
         // Seed default template if MySQL is empty
         try {
-            const labels = await storage.getLabels();
-            if (labels.length === 0) {
+            const res = await storage.getLabels(1, 1, ''); // 只查1条看是否空
+            if (res.total === 0) {
                 await storage.addLabel({
                     id: 'default-delivery-layout',
                     name: '出货标签',

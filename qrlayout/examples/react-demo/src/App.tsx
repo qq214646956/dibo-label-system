@@ -5,9 +5,8 @@ import 'qrlayout-ui/style.css';
 import './App.css';
 import { LabelList } from './features/labels/LabelList';
 import { storage } from './services/storage';
-import { ArrowLeft, Tag, Truck, Home, Users, LogOut, History, FileUp } from 'lucide-react';
+import { ArrowLeft, Tag, Truck, Users, LogOut, History, FileUp } from 'lucide-react';
 import { EmployeeMaster } from './features/employees/EmployeeMaster';
-import { LandingPage } from './features/home/LandingPage';
 import { LoginPage, type UserInfo } from './features/auth/LoginPage';
 import { UserManagePage } from './features/auth/UserManagePage';
 import { TemplateLogPage } from './features/auth/TemplateLogPage';
@@ -47,6 +46,7 @@ const SAMPLE_SCHEMAS: Record<string, EntitySchema> = {
       { name: "NAME1", label: "客户名称" },
       { name: "SORTL", label: "客户简称" },
       { name: "USERNAME", label: "过账人" },
+      { name: "EX_TEXT", label: "销售订单抬头文本" },
       { name: "DATE", label: "打印日期" },
       { name: "TIME", label: "打印时间" },
       { name: "DATETIME", label: "打印日期时间" },
@@ -82,6 +82,7 @@ const SAMPLE_SCHEMAS: Record<string, EntitySchema> = {
       NAME1: "地博铜业有限公司",
       SORTL: "地博铜业",
       USERNAME: "IT01",
+      EX_TEXT: "合同号: HT2026-001\n订单备注: 加急发货\n包装要求: 木托包装",
       DATE: "2026-05-25",
       TIME: "14:30:00",
       DATETIME: "2026-05-25 14:30:00",
@@ -124,7 +125,7 @@ function scaleElementsToFit(
     h: el.h * scale,
     style: el.style ? {
       ...el.style,
-      fontSize: el.style.fontSize ? Math.max(6, Math.round(el.style.fontSize * scale)) : undefined,
+      fontSize: el.style.fontSize ? Math.max(8, Math.round(el.style.fontSize * scale)) : undefined,
       borderWidth: el.style.borderWidth ? Math.max(0.5, +(el.style.borderWidth * scale).toFixed(1)) : undefined,
     } : undefined,
   }));
@@ -141,9 +142,14 @@ function App() {
     } catch { return null; }
   });
 
-  const [mainView, setMainView] = useState<MainView>('home');
+  const [mainView, setMainView] = useState<MainView>('employees');
   const [subView, setSubView] = useState<SubView>('list');
   const [labels, setLabels] = useState<StickerLayout[]>([]);
+  const [labelsTotal, setLabelsTotal] = useState(0);
+  const [labelsPage, setLabelsPage] = useState(1);
+  const labelsPageSize = 20;
+  const [labelsSearch, setLabelsSearch] = useState('');
+  const [labelsType, setLabelsType] = useState('');
   const [editingLayout, setEditingLayout] = useState<StickerLayout | null>(null);
   const [newTemplateType, setNewTemplateType] = useState<'label' | 'report' | 'cover'>('label');
 
@@ -154,7 +160,7 @@ function App() {
   const handleLogout = () => {
     sessionStorage.removeItem('user');
     setUser(null);
-    setMainView('home');
+    setMainView('employees');
   };
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -192,14 +198,52 @@ function App() {
     e.target.value = '';
   };
 
+  // 带搜索+类型筛选的分页
+  const fetchLabelsPage = async (page: number, search?: string, type?: string) => {
+    const q = search !== undefined ? search : labelsSearch;
+    const t = type !== undefined ? type : labelsType;
+    try {
+      const res = await storage.getLabels(page, labelsPageSize, '', q, t);
+      setLabels(res.data);
+      setLabelsTotal(res.total || 0);
+      setLabelsPage(res.page);
+    } catch {}
+  };
+  const handleLabelsSearch = (q: string) => {
+    setLabelsSearch(q);
+    fetchLabelsPage(1, q);
+  };
+  const handleLabelsType = (t: string) => {
+    setLabelsType(t);
+    fetchLabelsPage(1, undefined, t);
+  };
+  const lastFetchRef = useRef(Date.now());
+
   // Load data on mount
   useEffect(() => {
     (async () => {
       await storage.initializeDefaults();
-      const loadedLabels = await storage.getLabels();
-      setLabels(loadedLabels);
+      lastFetchRef.current = Date.now();
+      await fetchLabelsPage(1);
     })();
   }, []);
+
+  // 多人协作：增量轮询（仅拉取最近变更，<1KB）
+  useEffect(() => {
+    const timer = setInterval(async () => {
+      try {
+        const since = new Date(lastFetchRef.current - 60_000).toISOString(); // 多拉1分钟防漏
+        const delta = await storage.getLabelsDelta(since);
+        if (delta.data.length > 0 || delta.deleted.length > 0) {
+          lastFetchRef.current = Date.now();
+          // 有变更/删除 → 静默刷新当前页
+          const res = await storage.getLabels(labelsPage, labelsPageSize, '', labelsSearch, labelsType);
+          if (res && res.data) { setLabels(res.data); setLabelsTotal(res.total || 0); }
+        }
+      } catch {}
+    }, 30_000);
+    return () => clearInterval(timer);
+  }, [labelsPage]);
 
   // Initialize Designer when switching to designer view
   useEffect(() => {
@@ -231,17 +275,16 @@ function App() {
         if (originalName && layout.name !== originalName) {
           layout.id = crypto.randomUUID();
         }
-        // 检查是否有同名模板，提示是否覆盖
-        const allLabels = await storage.getLabels();
-        const duplicate = allLabels.find((l: any) => l.name === layout.name && l.id !== layout.id);
-        if (duplicate) {
+        // 后端检查同名冲突
+        let result = await storage.addLabel(layout);
+        if (result.conflict) {
           const ok = confirm(`模板名称「${layout.name}」已存在，是否覆盖？\n\n覆盖将删除旧模板，新模板将保留。`);
           if (!ok) return;
-          await storage.deleteLabel(duplicate.id);
+          result = await storage.addLabel(layout, true); // overwrite=1
         }
-        await storage.addLabel(layout);
-        const updatedLabels = await storage.getLabels();
-        setLabels(updatedLabels);
+        if (!result.ok) return;
+        // 刷新第一页（新保存的模板排在最前）
+        await fetchLabelsPage(1);
         setSubView('list');
         setEditingLayout(null);
       }
@@ -261,15 +304,19 @@ function App() {
     setSubView('designer');
   };
 
-  const handleEdit = (layout: StickerLayout) => {
-    setEditingLayout(layout);
-    setSubView('designer');
+  const handleEdit = async (layout: StickerLayout) => {
+    // 从详情接口加载完整数据（含 elements）
+    const full = await storage.getLabel(layout.id);
+    if (full) {
+      setEditingLayout(full);
+      setSubView('designer');
+    }
   };
 
   const handleDelete = async (id: string) => {
     await storage.deleteLabel(id);
-    const updatedLabels = await storage.getLabels();
-    setLabels(updatedLabels);
+    // 刷新当前页（删除后可能本页少一条，正好补下一条）
+    await fetchLabelsPage(labelsPage);
   };
 
   const handleBackToList = () => {
@@ -320,14 +367,12 @@ function App() {
                 {/* Logo/Brand and Mobile Actions */}
                 <div className="flex items-center justify-between w-full lg:w-auto gap-3">
                   <div className="flex items-center gap-3">
-                    <div className="p-2 sm:p-2.5 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-xl shadow-md shrink-0">
-                      <svg className="w-5 h-5 sm:w-6 sm:h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z" />
-                      </svg>
+                    <div className="shrink-0">
+                      <img src="/公司LOGO.png" alt="地博" className="w-8 h-8 sm:w-9 sm:h-9 rounded-lg shadow-md object-contain bg-white" />
                     </div>
                     <div>
                       <h1 className="text-lg sm:text-xl font-bold bg-gradient-to-r from-gray-900 to-gray-700 bg-clip-text text-transparent truncate max-w-[150px] sm:max-w-full">
-                        条码布局设计器
+                        客户出货自助系统
                       </h1>
                       {/* 已移除：作者 @shashi089
                       <div className="flex items-center gap-2">
@@ -358,16 +403,7 @@ function App() {
                 {/* Navigation Tabs - Scrollable on mobile */}
                 <div className="w-full lg:w-auto overflow-x-auto pb-1 lg:pb-0 scrollbar-hide -mx-4 px-4 lg:mx-0 lg:px-0">
                   <nav className="flex gap-1.5 sm:gap-2 bg-gray-100 p-1 sm:p-1.5 rounded-xl w-max mx-auto lg:mx-0">
-                    <button
-                      onClick={() => handleMainViewChange('home')}
-                      className={`flex items-center gap-2 px-4 py-2 font-semibold transition-all duration-200 rounded-lg cursor-pointer ${mainView === 'home'
-                        ? 'bg-white text-blue-600 shadow-sm'
-                        : 'text-gray-600 hover:text-gray-900 hover:bg-white/50'
-                        }`}
-                    >
-                      <Home size={18} />
-                      <span className="hidden md:inline">首页</span>
-                    </button>
+                    {/* 已移除：首页按钮 */}
                     {/* 已移除：文档按钮
                     <button
                       onClick={() => handleMainViewChange('docs')}
@@ -468,10 +504,18 @@ function App() {
 
           {/* Content Based on Tab */}
           {mainView === 'home' ? (
-            <LandingPage onNavigate={handleMainViewChange} />
+            <EmployeeMaster />
           ) : mainView === 'labels' ? (
             <LabelList
               labels={labels}
+              total={labelsTotal}
+              page={labelsPage}
+              pageSize={labelsPageSize}
+              searchQuery={labelsSearch}
+              typeFilter={labelsType}
+              onSearchChange={handleLabelsSearch}
+              onTypeChange={handleLabelsType}
+              onPageChange={fetchLabelsPage}
               onCreateNew={handleCreateNew}
               onEdit={handleEdit}
               onDelete={handleDelete}

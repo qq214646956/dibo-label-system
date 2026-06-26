@@ -15,9 +15,11 @@ interface Props {
 export function PreviewModal({ layout, items, printer, onClose, coverLayout }: Props) {
     const [idx, setIdx] = useState(0);
     const [previewUrl, setPreviewUrl] = useState('');
+    const [displayW, setDisplayW] = useState(0);
+    const [displayH, setDisplayH] = useState(0);
     const canvasRef = useRef<HTMLCanvasElement>(null);
 
-    const hasCover = !!coverLayout;
+    const hasCover = !!coverLayout && !!items[0]?.EX_TEXT;
     const total = hasCover ? items.length + 1 : items.length;
     const isCoverPage = hasCover && idx === 0;
     const labelIdx = hasCover ? idx - 1 : idx;
@@ -27,8 +29,11 @@ export function PreviewModal({ layout, items, printer, onClose, coverLayout }: P
     const renderPreview = useCallback(async () => {
         if (!canvasRef.current) return;
         try {
-            const url = await printer.renderToDataURL(activeLayout, item, { canvas: canvasRef.current, format: 'png' });
+            // 2x retina rendering for crisp preview
+            const url = await printer.renderToDataURL(activeLayout, item, { canvas: canvasRef.current, format: 'png', scale: 2 });
             setPreviewUrl(url);
+            setDisplayW(canvasRef.current.width / 2);
+            setDisplayH(canvasRef.current.height / 2);
         } catch (err) {
             console.error('预览渲染失败', err);
         }
@@ -93,13 +98,13 @@ export function PreviewModal({ layout, items, printer, onClose, coverLayout }: P
             page.appendChild(canvas);
             win.document.body.appendChild(page);
         };
-        if (coverLayout) {
+        if (coverLayout && printItems[0]?.EX_TEXT) {
             await renderPage(coverLayout, { ...(printItems[0] || {}), _IDX: 0 });
         }
         for (let i = 0; i < printItems.length; i++) {
             await renderPage(single ? activeLayout! : layout, single ? item : items[i]);
         }
-        const totalPages = (coverLayout ? 1 : 0) + printItems.length;
+        const totalPages = (hasCover ? 1 : 0) + printItems.length;
         const tip = Object.assign(win.document.createElement('div'), {
             className: 'noprint', style: 'text-align:center;padding:20px;color:#999;font-size:12px',
             textContent: `共 ${totalPages} 页 — 选择打印机后点击打印`
@@ -124,11 +129,11 @@ export function PreviewModal({ layout, items, printer, onClose, coverLayout }: P
                 </div>
 
                 {/* Preview Canvas */}
-                <div className="flex-1 overflow-auto bg-gray-100 flex items-center justify-center p-6">
-                    <div className="bg-white rounded-xl shadow-md p-4">
+                <div className="flex-1 overflow-auto bg-gray-100 flex flex-col p-6">
+                    <div className="bg-white rounded-xl shadow-md p-4 mx-auto">
                         <canvas ref={canvasRef} className="max-w-full" style={{ display: previewUrl ? 'none' : 'block' }} />
                         {previewUrl && (
-                            <img src={previewUrl} alt="标签预览" className="max-w-full h-auto" style={{ maxHeight: '380px' }} />
+                            <img src={previewUrl} alt="标签预览" style={{ width: displayW, height: displayH }} />
                         )}
                     </div>
                 </div>

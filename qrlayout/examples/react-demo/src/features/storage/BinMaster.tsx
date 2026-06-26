@@ -25,8 +25,8 @@ export function BinMaster() {
 
     const loadData = async () => {
         setBins(storage.getBins());
-        const loadedLabels = await storage.getLabels();
-        const storageLabels = loadedLabels.filter((l: any) => l.targetEntity === 'storage');
+        const res = await storage.getLabels(1, 9999, 'storage');
+        const storageLabels = res.data;
         setLabels(storageLabels);
         if (storageLabels.length > 0 && !selectedLayoutId) {
             setSelectedLayoutId(storageLabels[0].id);
